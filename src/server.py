@@ -40,11 +40,20 @@ app = FastAPI(
     version="1.0.0",
 )
 
+LOCAL_ORIGINS = [
+    "http://localhost",
+    "http://localhost:8000",
+    "http://127.0.0.1",
+    "http://127.0.0.1:8000",
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=LOCAL_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
 
@@ -56,8 +65,9 @@ mcu_config = McuHardwareScenarioConfig()
 runner = BenchmarkRunner(key_manager=key_manager, receiver=receiver, power_model=power_config)
 run_store = RunStore()
 
-# State for currently generated demo batch
+# State for currently generated demo batch and seed
 current_demo_records: List[SensorRecord] = []
+current_demo_seed: Optional[int] = None
 current_power_override: Optional[Any] = None
 
 
@@ -148,16 +158,37 @@ def get_mcu_scenario(
 ):
     """Calculate MCU scenario using query params, current demo records, or default 100-record batch.
     Supports profile ('radio_heavy' | 'short_tx') or explicit radio_tx_ms override.
+    Requires high_count + low_count == record_count if counts are specified.
     """
     global current_demo_records, mcu_config
     if record_count is not None:
-        rec_count = max(1, record_count)
+        rec_count = record_count
+        if rec_count < 1 or rec_count > 1000:
+            raise HTTPException(status_code=422, detail="record_count must be between 1 and 1000.")
         if high_count is not None and low_count is not None:
-            high_cnt = max(0, high_count)
-            low_cnt = max(0, low_count)
+            if high_count < 0 or low_count < 0 or (high_count + low_count != rec_count):
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        f"Invalid workload split: high_count ({high_count}) + low_count ({low_count}) "
+                        f"must equal record_count ({rec_count}), with non-negative counts."
+                    ),
+                )
+            high_cnt = high_count
+            low_cnt = low_count
+        elif high_count is not None or low_count is not None:
+            raise HTTPException(
+                status_code=422,
+                detail="Both high_count and low_count must be provided together, or omitted for default 45/55 split.",
+            )
         else:
             high_cnt = int(rec_count * 0.45)
             low_cnt = rec_count - high_cnt
+    elif high_count is not None or low_count is not None:
+        raise HTTPException(
+            status_code=422,
+            detail="record_count must be specified when setting sensitivity counts.",
+        )
     elif current_demo_records:
         rec_count = len(current_demo_records)
         high_cnt = sum(1 for r in current_demo_records if r.sensitivity == SensitivityLevel.HIGH)
@@ -185,12 +216,37 @@ def run_mcu_scenario(req: McuScenarioRequest):
 
     if req.record_count is not None:
         rec_count = req.record_count
+        if rec_count < 1 or rec_count > 1000:
+            raise HTTPException(status_code=422, detail="record_count must be between 1 and 1000.")
         if req.high_sensitivity_count is not None and req.low_sensitivity_count is not None:
+            if (
+                req.high_sensitivity_count < 0
+                or req.low_sensitivity_count < 0
+                or (req.high_sensitivity_count + req.low_sensitivity_count != rec_count)
+            ):
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        f"Invalid workload split: high_sensitivity_count ({req.high_sensitivity_count}) + "
+                        f"low_sensitivity_count ({req.low_sensitivity_count}) must equal record_count ({rec_count}), "
+                        f"with non-negative counts."
+                    ),
+                )
             high_cnt = req.high_sensitivity_count
             low_cnt = req.low_sensitivity_count
+        elif req.high_sensitivity_count is not None or req.low_sensitivity_count is not None:
+            raise HTTPException(
+                status_code=422,
+                detail="Both high_sensitivity_count and low_sensitivity_count must be provided together, or omitted.",
+            )
         else:
             high_cnt = int(rec_count * 0.45)
             low_cnt = rec_count - high_cnt
+    elif req.high_sensitivity_count is not None or req.low_sensitivity_count is not None:
+        raise HTTPException(
+            status_code=422,
+            detail="record_count must be specified when setting sensitivity counts.",
+        )
     elif current_demo_records:
         rec_count = len(current_demo_records)
         high_cnt = sum(1 for r in current_demo_records if r.sensitivity == SensitivityLevel.HIGH)
@@ -213,7 +269,7 @@ def run_mcu_scenario(req: McuScenarioRequest):
 @app.post("/api/demo/generate")
 def generate_synthetic_data(req: GenerateRequest):
     """Generate a seeded batch of synthetic healthcare sensor records."""
-    global current_demo_records
+    global current_demo_records, current_demo_seed
     gen = SyntheticDataGenerator(seed=req.seed)
     records = gen.generate_batch(
         count=req.count,
@@ -221,6 +277,7 @@ def generate_synthetic_data(req: GenerateRequest):
         cluster_manager=runner.cluster_manager,
     )
     current_demo_records = records
+    current_demo_seed = req.seed
 
     high_group, low_group = runner.cluster_manager.form_clusters(records)
 
@@ -237,10 +294,10 @@ def generate_synthetic_data(req: GenerateRequest):
 @app.post("/api/benchmark/run")
 def execute_benchmark(req: BenchmarkRunRequest):
     """Execute baseline, adaptive, or paired comparison benchmark."""
-    global current_demo_records, current_power_override
+    global current_demo_records, current_demo_seed, current_power_override
 
     # Use pre-generated records if count and seed match, otherwise generate fresh
-    if current_demo_records and len(current_demo_records) == req.record_count:
+    if current_demo_records and len(current_demo_records) == req.record_count and current_demo_seed == req.seed:
         records = current_demo_records
     else:
         gen = SyntheticDataGenerator(seed=req.seed)
@@ -250,15 +307,21 @@ def execute_benchmark(req: BenchmarkRunRequest):
             cluster_manager=runner.cluster_manager,
         )
         current_demo_records = records
+        current_demo_seed = req.seed
 
     if req.mode == "comparison":
         comp_result = runner.run_comparison(
             record_count=req.record_count,
             seed=req.seed,
             repetitions=req.repetitions,
+            records=records,
         )
         if "error" in comp_result:
             raise HTTPException(status_code=400, detail=comp_result["error"])
+
+        if "_records_objects" in comp_result:
+            current_demo_records = comp_result["_records_objects"]
+            current_demo_seed = req.seed
 
         base_summary = comp_result["baseline_summary"]
         adapt_summary = comp_result["adaptive_summary"]

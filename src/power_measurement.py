@@ -307,6 +307,11 @@ class McuEnergyModel:
         n = max(1, total_records)
         n_high = max(0, high_sensitivity_count)
         n_routine = max(0, low_sensitivity_count)
+        if n_high + n_routine != n:
+            raise ValueError(
+                f"Invalid workload split: high_sensitivity_count ({n_high}) + "
+                f"low_sensitivity_count ({n_routine}) must equal total_records ({n})."
+            )
 
         # Baseline: All N records use Software AES-256-GCM
         # 1. Non-overlapping activity intervals for Baseline (ms)
@@ -439,29 +444,69 @@ class McuEnergyModel:
                 "is_improvement": sw_comp.get("is_improvement", False),
             })
 
-        # Profile classification metadata
-        is_short_tx = (cfg.t_radio_tx_ms <= 0.60)
-        profile_id = "short_tx" if is_short_tx else "radio_heavy"
-        profile_name_str = (
-            "Compute-Intensive / Short-Transmission MCU Scenario (0.5 ms Radio TX)"
-            if is_short_tx
-            else "Radio-Heavy MCU Model (1.5 ms Radio TX)"
+        # Profile classification metadata:
+        # Check if parameters match preset 1 (short_tx @ 0.50 ms) or preset 2 (radio_heavy @ 1.50 ms)
+        is_default_params = (
+            abs(cfg.t_aes_gcm_ms - 1.25) < 0.05
+            and abs(cfg.supply_voltage_v - 3.3) < 0.05
+            and abs(cfg.mcu_clock_hz - 16_000_000.0) < 100_000.0
+            and abs(cfg.t_sha256_keystream_ms - 0.25) < 0.05
+            and abs(cfg.t_xor_stream_ms - 0.01) < 0.005
+            and abs(cfg.t_hmac_sha256_ms - 0.38) < 0.05
         )
-        provenance_label_str = (
-            "COMPUTE-INTENSIVE / SHORT-TX MCU SCENARIO — CONFIGURABLE HYPOTHETICAL MODEL"
-            if is_short_tx
-            else "SIMULATED TARGET-MCU SCENARIO — RESULTS DEPEND ON CONFIGURED ASSUMPTIONS"
-        )
-        provenance_disclaimer_str = (
-            "Configurable hypothetical model for high-throughput short airtime radios (e.g., BLE 2Mbps / packed telemetry @ 0.5 ms TX airtime). "
-            "Valid only for workloads and radio settings that support 0.5 ms airtime. "
-            "Simulated values depend on configured clock, current, and airtime assumptions. Does not represent measured hardware."
-            if is_short_tx
-            else
-            "Illustrative mathematical energy model for a constrained target MCU without hardware AES acceleration. "
-            "Standard IoT radio scenario (802.15.4 / low-baud BLE @ 1.5 ms TX) where radio transmission dominates the power budget (~73%). "
-            "Requires empirical physical measurements on target hardware before real-world energy savings can be verified."
-        )
+
+        is_short_tx_preset = is_default_params and abs(cfg.t_radio_tx_ms - 0.50) < 0.05
+        is_radio_heavy_preset = is_default_params and abs(cfg.t_radio_tx_ms - 1.50) < 0.05
+
+        if is_short_tx_preset:
+            profile_id = "short_tx"
+            profile_name_str = "Compute-Intensive / Short-Transmission MCU Scenario (0.50 ms Radio TX)"
+            provenance_label_str = "COMPUTE-INTENSIVE / SHORT-TX MCU SCENARIO — CONFIGURABLE HYPOTHETICAL MODEL"
+            provenance_disclaimer_str = (
+                "Configurable hypothetical model for high-throughput short airtime radios (e.g., BLE 2Mbps / packed telemetry @ 0.5 ms TX airtime). "
+                "Valid only for workloads and radio settings that support 0.5 ms airtime. "
+                "Simulated values depend on configured clock, current, and airtime assumptions. Does not represent measured hardware."
+            )
+        elif is_radio_heavy_preset:
+            profile_id = "radio_heavy"
+            profile_name_str = "Radio-Heavy MCU Model (1.50 ms Radio TX)"
+            provenance_label_str = "SIMULATED TARGET-MCU SCENARIO — RESULTS DEPEND ON CONFIGURED ASSUMPTIONS"
+            provenance_disclaimer_str = (
+                "Illustrative mathematical energy model for a constrained target MCU without hardware AES acceleration. "
+                "Standard IoT radio scenario (802.15.4 / low-baud BLE @ 1.5 ms TX) where radio transmission dominates the power budget (~73%). "
+                "Requires empirical physical measurements on target hardware before real-world energy savings can be verified."
+            )
+        else:
+            profile_id = "custom"
+            profile_name_str = f"Custom MCU Configuration ({cfg.t_radio_tx_ms:.2f} ms Radio TX)"
+            provenance_label_str = f"CUSTOM MCU PARAMETERS ({cfg.t_radio_tx_ms:.2f} ms Radio TX) — USER-CONFIGURED HYPOTHETICAL MODEL"
+            provenance_disclaimer_str = (
+                f"User-customized microcontroller parameters (Supply: {cfg.supply_voltage_v:.1f}V, "
+                f"Clock: {cfg.mcu_clock_hz/1e6:.1f} MHz, AES: {cfg.t_aes_gcm_ms:.2f} ms, "
+                f"Radio TX: {cfg.t_radio_tx_ms:.2f} ms @ {cfg.radio_tx_current_ma:.1f} mA). "
+                "Parametric sensitivity exploration. Does not represent measured hardware."
+            )
+
+        duty_cycle_info = {
+            "reporting_frequency_hz": round(1000.0 / cfg.t_duty_cycle_period_ms, 2),
+            "nominal_packet_period_ms": cfg.t_duty_cycle_period_ms,
+            "baseline": {
+                "active_time_per_record_ms": round(active_per_rec_base, 3),
+                "sleep_time_per_record_ms": round(idle_per_rec_base, 3),
+                "duty_cycle_percent": round((active_per_rec_base / cfg.t_duty_cycle_period_ms) * 100.0, 2),
+            },
+            "adaptive": {
+                "active_time_per_record_ms": round((t_proc_adapt_ms + t_crypto_adapt_ms + t_tx_adapt_ms) / n, 3),
+                "sleep_time_per_record_ms": round(t_idle_adapt_ms / n, 3),
+                "duty_cycle_percent": round(((t_proc_adapt_ms + t_crypto_adapt_ms + t_tx_adapt_ms) / (n * cfg.t_duty_cycle_period_ms)) * 100.0, 2),
+            },
+            "runtime_derivation_note": (
+                f"Indicative runtime ({cfg.battery_nominal_mah} mAh @ {cfg.battery_usable_factor*100:.0f}% usable capacity) "
+                f"assumes periodic {1000.0 / cfg.t_duty_cycle_period_ms:.0f} Hz reporting ({cfg.t_duty_cycle_period_ms:.1f} ms period per record) "
+                f"with MCU deep sleep ({cfg.idle_sleep_current_ma*1000:.0f} µA) between packet transmissions. "
+                f"Does not extrapolate from continuous unconstrained CPU burst execution."
+            ),
+        }
 
         return {
             "scenario_name": profile_name_str,
@@ -470,6 +515,7 @@ class McuEnergyModel:
             "mcu_model": cfg.mcu_model_name,
             "provenance_label": provenance_label_str,
             "provenance_disclaimer": provenance_disclaimer_str,
+            "duty_cycle_info": duty_cycle_info,
             "radio_sensitivity_sweep": radio_sensitivity_sweep,
             "record_count": n,
             "high_sensitivity_count": n_high,

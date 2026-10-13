@@ -435,6 +435,7 @@
               <select id="mcu-profile-select" style="background:var(--bg-surface-1);border:1px solid var(--brand-cyan);color:#fff;border-radius:var(--radius-sm);padding:0.35rem 0.65rem;font-size:0.82rem;font-weight:600;cursor:pointer;">
                 <option value="short_tx" selected>Compute-Intensive / Short-TX (0.5 ms Radio TX)</option>
                 <option value="radio_heavy">Radio-Heavy MCU Model (1.5 ms Radio TX)</option>
+                <option value="custom">Custom MCU Configuration</option>
               </select>
             </div>
             <button id="btn-toggle-mcu-params" class="btn btn-outline" style="font-size:0.75rem;padding:0.3rem 0.65rem;">
@@ -707,6 +708,13 @@
                   <td id="sim-sum-delta-hours">&mdash;</td>
                   <td id="sim-sum-dir-hours">&mdash;</td>
                 </tr>
+                <tr>
+                  <td colspan="5" style="font-size:0.72rem;color:var(--text-muted);background:rgba(255,255,255,0.02);padding:0.45rem 0.75rem;border-top:1px dashed var(--border-subtle);line-height:1.45;">
+                    <div id="runtime-duty-cycle-footnote">
+                      <strong>Duty-Cycle Basis:</strong> Periodic 50 Hz reporting (20.0 ms period per record) with 1200 mAh nominal capacity (85% usable). Baseline duty-cycle: ~8.8% active, ~91.2% deep-sleep (5 µA). Adaptive duty-cycle: ~7.6% active, ~92.4% deep-sleep. Runtime reflects periodic idle sleep rather than continuous burst execution.
+                    </div>
+                  </td>
+                </tr>
               </tbody>
             </table>
           </div>
@@ -967,6 +975,120 @@
             </div>
             <div style="font-size:0.7rem;color:var(--text-muted);margin-top:0.4rem;">
               *Evaluated across radio-active intervals under identical MCU clock, currents, and 45/55 workload split.
+            </div>
+          </div>
+
+          <!-- Sub-Panel F: MCU Energy Model Assumptions & Provenance Classification Table -->
+          <div style="margin-top:1.25rem;background:var(--bg-surface-1);border:1px solid var(--border-subtle);border-radius:var(--radius-sm);padding:1rem;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.65rem;flex-wrap:wrap;gap:0.5rem;">
+              <h5 style="font-size:0.85rem;font-weight:600;color:#fff;margin:0;">
+                F. Target-MCU Energy Model Assumptions &amp; Provenance Classification
+              </h5>
+              <span class="badge badge-aes" style="font-size:0.7rem;">Provenance &amp; Epistemic Classification</span>
+            </div>
+            <p style="font-size:0.76rem;color:var(--text-secondary);margin:0 0 0.75rem 0;line-height:1.4;">
+              In accordance with academic reproducibility standards, every parameter in the simulated microcontroller model is classified below by its epistemic origin: <strong>Hypothetical Parameter</strong> (configurable architectural premise), <strong>Model-Derived</strong> (computed mathematically from physics/clock equations), or <strong>Empirical Hardware</strong> (directly measured on hardware). No parameters are tuned to fabricate artificial savings.
+            </p>
+            <div style="overflow-x:auto;">
+              <table class="data-table" style="font-size:0.78rem;">
+                <thead>
+                  <tr>
+                    <th>Model Parameter</th>
+                    <th>Value / Expression</th>
+                    <th>Provenance Classification</th>
+                    <th>Epistemic Basis &amp; Hardware Justification</th>
+                  </tr>
+                </thead>
+                <tbody id="mcu-provenance-tbody">
+                  <tr>
+                    <td>Supply Voltage (V<sub>cc</sub>)</td>
+                    <td>3.30 V</td>
+                    <td><span class="badge" style="background:rgba(148,163,184,0.15);color:#cbd5e1;font-size:0.68rem;">Hypothetical Parameter</span></td>
+                    <td>Standard nominal regulated supply voltage for low-power edge MCUs (ARM Cortex-M0+ / ATmega328P).</td>
+                  </tr>
+                  <tr>
+                    <td>MCU Clock Frequency (f<sub>clk</sub>)</td>
+                    <td>16.0 MHz</td>
+                    <td><span class="badge" style="background:rgba(148,163,184,0.15);color:#cbd5e1;font-size:0.68rem;">Hypothetical Parameter</span></td>
+                    <td>Common operating frequency for battery-powered sensor nodes balancing power and throughput.</td>
+                  </tr>
+                  <tr>
+                    <td>Battery Capacity &amp; Usable Factor</td>
+                    <td>1200 mAh (85% usable)</td>
+                    <td><span class="badge" style="background:rgba(148,163,184,0.15);color:#cbd5e1;font-size:0.68rem;">Hypothetical / Datasheet</span></td>
+                    <td>Typical single-cell Li-Po / Li-Ion secondary cell with LDO regulator drop-out margin.</td>
+                  </tr>
+                  <tr>
+                    <td>Software AES-256-GCM Latency</td>
+                    <td>1.25 ms (~20,000 cycles)</td>
+                    <td><span class="badge" style="background:rgba(148,163,184,0.15);color:#cbd5e1;font-size:0.68rem;">Hypothetical / Literature</span></td>
+                    <td>Software-only AES implementation (Mbed-TLS / Tiny-AES on Cortex-M0+ without hardware AES-NI).</td>
+                  </tr>
+                  <tr>
+                    <td>SHA-256 Keystream Generation</td>
+                    <td>0.25 ms (~4,000 cycles)</td>
+                    <td><span class="badge" style="background:rgba(148,163,184,0.15);color:#cbd5e1;font-size:0.68rem;">Hypothetical / Literature</span></td>
+                    <td>Software SHA-256 single-block transform for PRNG keystream generation.</td>
+                  </tr>
+                  <tr>
+                    <td>Bitwise XOR Stream Processing</td>
+                    <td>0.01 ms (~160 cycles)</td>
+                    <td><span class="badge" style="background:rgba(148,163,184,0.15);color:#cbd5e1;font-size:0.68rem;">Hypothetical / Literature</span></td>
+                    <td>Tight 16-byte buffer XOR loop executing directly in MCU RAM.</td>
+                  </tr>
+                  <tr>
+                    <td>HMAC-SHA256 Authentication Tag</td>
+                    <td>0.38 ms (~6,080 cycles)</td>
+                    <td><span class="badge" style="background:rgba(148,163,184,0.15);color:#cbd5e1;font-size:0.68rem;">Hypothetical / Literature</span></td>
+                    <td>Two-pass keyed HMAC integrity check applied to routine records.</td>
+                  </tr>
+                  <tr>
+                    <td>Radio TX Active Airtime (t<sub>tx</sub>)</td>
+                    <td>0.50 ms / 1.50 ms</td>
+                    <td><span class="badge" style="background:rgba(148,163,184,0.15);color:#cbd5e1;font-size:0.68rem;">Hypothetical / Workload</span></td>
+                    <td>Configurable packet transmission airtime (0.5 ms high-baud BLE 2M / 1.5 ms standard 802.15.4).</td>
+                  </tr>
+                  <tr>
+                    <td>Radio TX Active Current</td>
+                    <td>28.0 mA</td>
+                    <td><span class="badge" style="background:rgba(148,163,184,0.15);color:#cbd5e1;font-size:0.68rem;">Hypothetical / Datasheet</span></td>
+                    <td>Representative active transmit current at 0 dBm output power (e.g. TI CC2500 / nRF52840).</td>
+                  </tr>
+                  <tr>
+                    <td>Idle / Deep-Sleep Current</td>
+                    <td>0.005 mA (5.0 µA)</td>
+                    <td><span class="badge" style="background:rgba(148,163,184,0.15);color:#cbd5e1;font-size:0.68rem;">Hypothetical / Datasheet</span></td>
+                    <td>Typical low-power sleep current with RTC timer enabled during reporting interval.</td>
+                  </tr>
+                  <tr>
+                    <td>Estimated CPU Clock Cycles</td>
+                    <td>t<sub>crypto</sub> &times; f<sub>clk</sub></td>
+                    <td><span class="badge" style="background:rgba(56,189,248,0.15);color:var(--brand-cyan);font-size:0.68rem;">Model-Derived</span></td>
+                    <td>Computed directly from execution time multiplied by MCU clock frequency.</td>
+                  </tr>
+                  <tr>
+                    <td>Activity Interval Energy (mJ)</td>
+                    <td>E = V<sub>cc</sub> &times; I &times; t</td>
+                    <td><span class="badge" style="background:rgba(56,189,248,0.15);color:var(--brand-cyan);font-size:0.68rem;">Model-Derived</span></td>
+                    <td>Physics-based electrical work calculation for disjoint non-overlapping operational phases.</td>
+                  </tr>
+                  <tr>
+                    <td>Indicative Battery Runtime</td>
+                    <td>C<sub>usable</sub> / I<sub>mean,duty</sub></td>
+                    <td><span class="badge" style="background:rgba(56,189,248,0.15);color:var(--brand-cyan);font-size:0.68rem;">Model-Derived</span></td>
+                    <td>Derived using weighted duty-cycle averaging at 50 Hz reporting frequency (20 ms period).</td>
+                  </tr>
+                  <tr>
+                    <td>Desktop Host Benchmark Latencies</td>
+                    <td>Measured via perf_counter</td>
+                    <td><span class="badge" style="background:rgba(16,185,129,0.15);color:#34d399;font-size:0.68rem;">Empirical Hardware</span></td>
+                    <td>Directly benchmarked on host workstation CPU with hardware AES-NI instructions.</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <div style="font-size:0.7rem;color:var(--text-muted);margin-top:0.4rem;">
+              *Hypothetical values represent realistic non-accelerated 8/32-bit MCU profiles and do not substitute for empirical oscilloscope or shunt-resistor measurements on physical edge hardware.
             </div>
           </div>
         </div>

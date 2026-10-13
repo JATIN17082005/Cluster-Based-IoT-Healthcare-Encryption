@@ -296,16 +296,18 @@ class BenchmarkRunner:
         seed: int = 42,
         repetitions: int = 10,
         warmup_repetitions: int = 2,
+        records: Optional[List[SensorRecord]] = None,
     ) -> Dict[str, Any]:
         """Execute paired comparison runs with warmup, multi-repetition distribution stats,
         and authoritative unrounded percentage change / energy savings.
         """
-        gen = SyntheticDataGenerator(seed=seed)
-        records = gen.generate_batch(
-            count=record_count,
-            classifier=self.classifier,
-            cluster_manager=self.cluster_manager,
-        )
+        if records is None or len(records) != record_count:
+            gen = SyntheticDataGenerator(seed=seed)
+            records = gen.generate_batch(
+                count=record_count,
+                classifier=self.classifier,
+                cluster_manager=self.cluster_manager,
+            )
 
         # 1. Warm-up runs to stabilize JIT, CPU governor, and crypto caches
         for _ in range(warmup_repetitions):
@@ -449,4 +451,6 @@ class BenchmarkRunner:
             "adaptive_summary": adapt_summary,
             "all_baseline_runs": baseline_runs,
             "all_adaptive_runs": adaptive_runs,
+            "records": [r.model_dump() for r in records],
+            "_records_objects": records,
         }

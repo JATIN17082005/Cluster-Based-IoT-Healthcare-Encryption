@@ -20,8 +20,9 @@ ENV/
 Thumbs.db
 Desktop.ini
 
-# Test databases
-data/test_*.db
+# Test databases and runtime SQLite files
+data/*.db
+*.db
 
 # Logs
 *.log

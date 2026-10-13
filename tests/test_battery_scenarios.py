@@ -30,6 +30,12 @@ def client():
     return TestClient(app)
 
 
+@pytest.fixture(autouse=True)
+def reset_mcu_config_defaults(client):
+    yield
+    client.post("/api/battery/mcu-config", json=McuHardwareScenarioConfig().model_dump())
+
+
 # --- Test 1: MCU Non-Overlapping Activity Accounting ---
 
 def test_mcu_energy_model_non_overlapping_intervals():
@@ -196,14 +202,19 @@ def test_presentation_scale_does_not_change_energy():
 
 def test_mcu_scenario_api_endpoints(client):
     """Verify GET and POST /api/battery/mcu-config and /api/battery/mcu-scenario endpoints."""
-    # 1. GET MCU Config
+    # 1. GET MCU Config (default)
     get_cfg = client.get("/api/battery/mcu-config")
     assert get_cfg.status_code == 200
     cfg_data = get_cfg.json()
     assert "cpu_active_current_ma" in cfg_data
     assert "t_aes_gcm_ms" in cfg_data
 
-    # 2. POST Update MCU Config
+    # 2. GET Default MCU Scenario
+    get_scen_def = client.get("/api/battery/mcu-scenario")
+    assert get_scen_def.status_code == 200
+    assert "TARGET-MCU" in get_scen_def.json()["provenance_label"] or "SHORT-TX" in get_scen_def.json()["provenance_label"]
+
+    # 3. POST Update MCU Config (custom parameters)
     update_resp = client.post("/api/battery/mcu-config", json={
         "cpu_active_current_ma": 9.0,
         "t_aes_gcm_ms": 1.40,
@@ -211,16 +222,17 @@ def test_mcu_scenario_api_endpoints(client):
     assert update_resp.status_code == 200
     assert update_resp.json()["config"]["cpu_active_current_ma"] == 9.0
 
-    # 3. GET MCU Scenario
+    # 4. GET MCU Scenario with custom config correctly reports CUSTOM MCU PARAMETERS
     get_scen = client.get("/api/battery/mcu-scenario")
     assert get_scen.status_code == 200
     scen_data = get_scen.json()
     assert "baseline" in scen_data
     assert "adaptive" in scen_data
     assert "energy_comparison" in scen_data
-    assert scen_data["provenance_label"] == "SIMULATED TARGET-MCU SCENARIO — RESULTS DEPEND ON CONFIGURED ASSUMPTIONS"
+    assert "CUSTOM MCU PARAMETERS" in scen_data["provenance_label"]
+    assert scen_data["profile_id"] == "custom"
 
-    # 4. POST MCU Scenario with custom record count and sensitivity
+    # 5. POST MCU Scenario with custom record count and sensitivity
     post_scen = client.post("/api/battery/mcu-scenario", json={
         "record_count": 80,
         "high_sensitivity_count": 30,
@@ -232,6 +244,9 @@ def test_mcu_scenario_api_endpoints(client):
     assert p_data["high_sensitivity_count"] == 30
     assert p_data["low_sensitivity_count"] == 50
     assert p_data["energy_comparison"]["result_status"] == "IMPROVEMENT"
+
+    # Reset back to default for clean state
+    client.post("/api/battery/mcu-config", json=McuHardwareScenarioConfig().model_dump())
 
 
 # --- Test 6: Strict Separation of Desktop and MCU Scenarios ---
@@ -450,7 +465,7 @@ def test_mcu_profiles_short_tx_vs_radio_heavy(client):
     # 1. Short-TX Profile
     res_short = model.calculate_scenario(100, 45, 55, profile_name="short_tx")
     assert res_short["profile_id"] == "short_tx"
-    assert "0.5 ms" in res_short["profile_name"]
+    assert "0.50 ms" in res_short["profile_name"]
     assert "COMPUTE-INTENSIVE" in res_short["provenance_label"]
     assert "0.5 ms airtime" in res_short["provenance_disclaimer"]
 
@@ -461,7 +476,7 @@ def test_mcu_profiles_short_tx_vs_radio_heavy(client):
     # 2. Radio-Heavy Profile
     res_heavy = model.calculate_scenario(100, 45, 55, profile_name="radio_heavy")
     assert res_heavy["profile_id"] == "radio_heavy"
-    assert "1.5 ms" in res_heavy["profile_name"]
+    assert "1.50 ms" in res_heavy["profile_name"]
     assert "SIMULATED TARGET-MCU" in res_heavy["provenance_label"]
 
     saving_heavy = res_heavy["energy_comparison"]["energy_saving_percent"]
@@ -554,6 +569,158 @@ def test_high_contrast_visual_battery_scaling_80_percent():
     adapt_mah_used = adapt_j / (vcc * 3.6)
     assert 0.0005 < base_mah_used < 0.002
     assert adapt_mah_used < base_mah_used
+
+
+# --- Test 14: Strict Workload Split & Boundary Validation (HTTP 422) ---
+
+def test_mcu_workload_split_validation_422(client):
+    """Verify that MCU endpoints reject unbalanced or invalid workload counts with HTTP 422."""
+    # 1. GET with high + low != total
+    resp_unbalanced = client.get("/api/battery/mcu-scenario?record_count=100&high_count=60&low_count=30")
+    assert resp_unbalanced.status_code == 422
+    assert "Invalid workload split" in resp_unbalanced.json()["detail"]
+
+    # 2. GET with negative count
+    resp_neg = client.get("/api/battery/mcu-scenario?record_count=100&high_count=-5&low_count=105")
+    assert resp_neg.status_code == 422
+
+    # 3. GET with out-of-range record_count
+    resp_zero = client.get("/api/battery/mcu-scenario?record_count=0")
+    assert resp_zero.status_code == 422
+
+    resp_excess = client.get("/api/battery/mcu-scenario?record_count=2000")
+    assert resp_excess.status_code == 422
+
+    # 4. POST with unbalanced counts
+    resp_post_unbalanced = client.post("/api/battery/mcu-scenario", json={
+        "record_count": 100,
+        "high_sensitivity_count": 70,
+        "low_sensitivity_count": 20,
+    })
+    assert resp_post_unbalanced.status_code == 422
+
+    # 5. Direct McuEnergyModel calculation raises ValueError
+    model = McuEnergyModel()
+    with pytest.raises(ValueError, match="Invalid workload split"):
+        model.calculate_scenario(total_records=100, high_sensitivity_count=60, low_sensitivity_count=30)
+
+
+# --- Test 15: Custom MCU Profile Identification & Dynamic Airtime ---
+
+def test_custom_mcu_profile_identification(client):
+    """Verify custom MCU profile identification when parameters deviate from named presets."""
+    model = McuEnergyModel()
+
+    # 1. Preset short_tx (0.50 ms)
+    res_short = model.calculate_scenario(100, 45, 55, profile_name="short_tx")
+    assert res_short["profile_id"] == "short_tx"
+
+    # 2. Preset radio_heavy (1.50 ms)
+    res_heavy = model.calculate_scenario(100, 45, 55, profile_name="radio_heavy")
+    assert res_heavy["profile_id"] == "radio_heavy"
+
+    # 3. Custom profile with intermediate airtime (0.85 ms)
+    res_custom_airtime = model.calculate_scenario(100, 45, 55, radio_tx_ms_override=0.85)
+    assert res_custom_airtime["profile_id"] == "custom"
+    assert "0.85 ms Radio TX" in res_custom_airtime["profile_name"]
+    assert "CUSTOM MCU PARAMETERS" in res_custom_airtime["provenance_label"]
+
+    # 4. Custom profile via API
+    resp_api = client.get("/api/battery/mcu-scenario?radio_tx_ms=0.85")
+    assert resp_api.status_code == 200
+    data = resp_api.json()
+    assert data["profile_id"] == "custom"
+    assert "0.85 ms" in data["profile_name"]
+
+
+# --- Test 16: Explicit Duty-Cycle Metadata & Runtime Derivation ---
+
+def test_duty_cycle_metadata_accounting():
+    """Verify that duty-cycle and indicative runtime calculations return explicit metadata."""
+    model = McuEnergyModel()
+    res = model.calculate_scenario(100, 45, 55)
+
+    assert "duty_cycle_info" in res
+    dc = res["duty_cycle_info"]
+
+    assert dc["reporting_frequency_hz"] == 50.0  # 1000 / 20 ms
+    assert dc["nominal_packet_period_ms"] == 20.0
+
+    base_dc = dc["baseline"]
+    adapt_dc = dc["adaptive"]
+
+    # Active + sleep per record strictly equals nominal period within rounding precision
+    assert abs(base_dc["active_time_per_record_ms"] + base_dc["sleep_time_per_record_ms"] - 20.0) < 0.005
+    assert abs(adapt_dc["active_time_per_record_ms"] + adapt_dc["sleep_time_per_record_ms"] - 20.0) < 0.005
+
+    # Duty cycle percentage reflects active time / nominal period
+    expected_base_pct = (base_dc["active_time_per_record_ms"] / 20.0) * 100.0
+    assert abs(base_dc["duty_cycle_percent"] - expected_base_pct) < 0.1
+
+    assert "runtime_derivation_note" in dc
+    assert "50 Hz" in dc["runtime_derivation_note"]
+    assert "deep sleep" in dc["runtime_derivation_note"]
+
+
+# --- Test 17: Seed Consistency between Generation, Benchmark, and Record Trace ---
+
+def test_seed_consistency_between_generation_and_benchmark(client):
+    """Verify that benchmark run reuses pre-generated records when seed and count match,
+    and regenerates consistently when seed or count changes.
+    """
+    # 1. Generate records with seed 77
+    gen_resp = client.post("/api/demo/generate", json={"seed": 77, "count": 25})
+    assert gen_resp.status_code == 200
+    gen_data = gen_resp.json()
+    generated_first_id = gen_data["all_records"][0]["record_id"]
+
+    # 2. Run benchmark with matching seed 77 and count 25
+    bench_resp = client.post("/api/benchmark/run", json={
+        "mode": "comparison",
+        "record_count": 25,
+        "seed": 77,
+        "repetitions": 1,
+    })
+    assert bench_resp.status_code == 200
+    comp_data = bench_resp.json()["comparison"]
+
+    # 3. Benchmarked records in comparison result match generated records exactly
+    assert comp_data["records"][0]["record_id"] == generated_first_id
+    assert len(comp_data["records"]) == 25
+
+    # 4. Query run details from saved run store
+    base_run_id = bench_resp.json()["baseline_run_id"]
+    rec_resp = client.get(f"/api/runs/{base_run_id}")
+    assert rec_resp.status_code == 200
+    records_list = rec_resp.json()["records"]
+    assert records_list[0]["record_id"] == generated_first_id
+
+
+# --- Test 18: Safe Localhost CORS Policy Verification ---
+
+def test_safe_localhost_cors_headers(client):
+    """Verify that CORS restricts access to safe local development origins."""
+    # Allowed origin: http://localhost:8000
+    resp_allowed = client.options("/api/health", headers={
+        "Origin": "http://localhost:8000",
+        "Access-Control-Request-Method": "GET",
+    })
+    assert resp_allowed.headers.get("access-control-allow-origin") == "http://localhost:8000"
+
+    # Allowed origin: http://127.0.0.1:8000
+    resp_ip_allowed = client.options("/api/health", headers={
+        "Origin": "http://127.0.0.1:8000",
+        "Access-Control-Request-Method": "GET",
+    })
+    assert resp_ip_allowed.headers.get("access-control-allow-origin") == "http://127.0.0.1:8000"
+
+    # Disallowed external origin: should not echo back malicious origin
+    resp_disallowed = client.options("/api/health", headers={
+        "Origin": "http://evil-attacker-site.com",
+        "Access-Control-Request-Method": "GET",
+    })
+    assert resp_disallowed.headers.get("access-control-allow-origin") != "http://evil-attacker-site.com"
+
 
 
 

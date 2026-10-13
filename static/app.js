@@ -1187,6 +1187,10 @@ document.addEventListener("DOMContentLoaded", () => {
         }
       }
 
+      if (data.profile_id && mcuProfileSelect) {
+        mcuProfileSelect.value = data.profile_id;
+      }
+
       if (data.provenance_label && scenarioDisclaimerTitle) {
         scenarioDisclaimerTitle.textContent = data.provenance_label;
       }
@@ -1197,7 +1201,22 @@ document.addEventListener("DOMContentLoaded", () => {
         scenarioBadgeHeader.textContent = data.provenance_label;
       }
       if (scenarioPillTag) {
-        scenarioPillTag.textContent = (data.profile_id === "short_tx") ? "SHORT-TX MCU SCENARIO" : "SIMULATED TARGET-MCU SCENARIO";
+        if (data.profile_id === "custom") {
+          scenarioPillTag.textContent = (data.profile_name || "CUSTOM MCU PROFILE").toUpperCase();
+        } else if (data.profile_id === "short_tx") {
+          scenarioPillTag.textContent = "SHORT-TX MCU SCENARIO";
+        } else {
+          scenarioPillTag.textContent = "RADIO-HEAVY MCU MODEL";
+        }
+        scenarioPillTag.className = "badge badge-aes";
+      }
+
+      const runtimeDutyFootnote = document.getElementById("runtime-duty-cycle-footnote");
+      if (runtimeDutyFootnote && data.duty_cycle_info) {
+        const dc = data.duty_cycle_info;
+        const bdc = dc.baseline;
+        const adc = dc.adaptive;
+        runtimeDutyFootnote.innerHTML = `<strong>Duty-Cycle Basis:</strong> Periodic ${dc.reporting_frequency_hz.toFixed(0)} Hz reporting (${dc.nominal_packet_period_ms.toFixed(1)} ms period) with 1200 mAh capacity (85% usable). Baseline: ~${bdc.duty_cycle_percent.toFixed(1)}% active (${bdc.active_time_per_record_ms.toFixed(2)} ms), ~${(100 - bdc.duty_cycle_percent).toFixed(1)}% sleep (${bdc.sleep_time_per_record_ms.toFixed(2)} ms). Adaptive: ~${adc.duty_cycle_percent.toFixed(1)}% active (${adc.active_time_per_record_ms.toFixed(2)} ms), ~${(100 - adc.duty_cycle_percent).toFixed(1)}% sleep (${adc.sleep_time_per_record_ms.toFixed(2)} ms). Runtime reflects periodic sleep rather than continuous burst execution.`;
       }
     } else {
       // Desktop Scenario Summary
@@ -1323,10 +1342,15 @@ document.addEventListener("DOMContentLoaded", () => {
   if (mcuProfileSelect) {
     mcuProfileSelect.addEventListener("change", async (e) => {
       const prof = e.target.value;
-      if (mcuTTx) {
-        mcuTTx.value = (prof === "short_tx") ? "0.5" : "1.5";
+      if (prof === "custom") {
+        if (mcuConfigDrawer) mcuConfigDrawer.style.display = "block";
+        await fetchMcuScenarioData(undefined, undefined, undefined, "custom");
+      } else {
+        if (mcuTTx) {
+          mcuTTx.value = (prof === "short_tx") ? "0.5" : "1.5";
+        }
+        await fetchMcuScenarioData(undefined, undefined, undefined, prof);
       }
-      await fetchMcuScenarioData(undefined, undefined, undefined, prof);
       resetBatterySim();
     });
   }
@@ -1406,19 +1430,23 @@ document.addEventListener("DOMContentLoaded", () => {
     };
 
     try {
-      await fetch("/api/battery/mcu-config", {
+      const postResp = await fetch("/api/battery/mcu-config", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(customCfg),
       });
-      if (mcuProfileSelect) {
-        mcuProfileSelect.value = txMsVal <= 0.6 ? "short_tx" : "radio_heavy";
+      if (!postResp.ok) {
+        const errJson = await postResp.json().catch(() => ({}));
+        throw new Error(errJson.detail || "Validation error");
       }
       showToast("MCU assumptions updated successfully.");
       const total = parseInt(mcuWorkloadTotal ? mcuWorkloadTotal.value : "100", 10) || 100;
       const high = parseInt(mcuWorkloadHigh ? mcuWorkloadHigh.value : "45", 10) || 45;
       const routine = parseInt(mcuWorkloadRoutine ? mcuWorkloadRoutine.value : "55", 10) || 55;
-      await fetchMcuScenarioData(total, high, routine, mcuProfileSelect ? mcuProfileSelect.value : undefined);
+      const data = await fetchMcuScenarioData(total, high, routine, "custom");
+      if (data && mcuProfileSelect) {
+        mcuProfileSelect.value = data.profile_id;
+      }
       resetBatterySim();
     } catch (err) {
       showToast("Failed to update MCU parameters: " + err.message, "danger");
@@ -1431,7 +1459,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   if (btnResetMcuDefaults) {
     btnResetMcuDefaults.addEventListener("click", async () => {
-      const isShortTx = (mcuProfileSelect ? mcuProfileSelect.value === "short_tx" : true);
+      const isShortTx = (mcuProfileSelect ? mcuProfileSelect.value !== "radio_heavy" : true);
       const defaultTxMs = isShortTx ? 0.5 : 1.5;
 
       if (mcuVcc) mcuVcc.value = "3.3";
@@ -1480,7 +1508,10 @@ document.addEventListener("DOMContentLoaded", () => {
           body: JSON.stringify(defaultCfg),
         });
         showToast("Reset MCU defaults applied.");
-        await fetchMcuScenarioData(100, 45, 55, mcuProfileSelect ? mcuProfileSelect.value : undefined);
+        if (mcuProfileSelect) {
+          mcuProfileSelect.value = isShortTx ? "short_tx" : "radio_heavy";
+        }
+        await fetchMcuScenarioData(100, 45, 55, isShortTx ? "short_tx" : "radio_heavy");
         resetBatterySim();
       } catch (err) {
         showToast("Failed to reset defaults: " + err.message, "danger");
