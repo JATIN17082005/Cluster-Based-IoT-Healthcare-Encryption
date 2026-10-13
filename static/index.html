@@ -1,0 +1,920 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ClusterGuard &bull; IoT Healthcare Security & Energy Lab</title>
+  <meta name="description" content="Academic research prototype evaluating sensitivity-based adaptive encryption and battery trade-offs for IoT healthcare telemetry.">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+
+  <!-- ========================================================================
+       TOP NAVIGATION BAR
+       ======================================================================== -->
+  <header class="top-nav">
+    <div class="brand-wrapper">
+      <div class="brand-icon-box" title="ClusterGuard Security & Energy Lab">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+          <path d="m9 12 2 2 4-4"/>
+        </svg>
+      </div>
+      <div class="brand-text">
+        <h1>
+          ClusterGuard
+          <span class="lab-badge">IoT Security &bull; Energy Lab</span>
+        </h1>
+        <p>Cluster-Based IoT Healthcare Encryption &bull; University Research Project</p>
+      </div>
+    </div>
+
+    <div class="nav-meta-group">
+      <!-- Backend Health Status Pill -->
+      <div id="backend-status-pill" class="status-pill online" title="FastAPI Backend Health Status">
+        <span class="pulse-dot"></span>
+        <span id="backend-status-text">Backend Connected</span>
+      </div>
+
+      <!-- Measurement Source Banner -->
+      <div id="provenance-banner" class="provenance-banner" title="Active measurement provenance level">
+        <span id="provenance-dot">&#9679;</span>
+        <span id="provenance-text">SIMULATED / ESTIMATED &mdash; NOT A PHYSICAL BATTERY READING</span>
+      </div>
+
+      <!-- Primary Action: Guided Demo -->
+      <button id="btn-start-guided-demo" class="btn-guided-demo">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+          <polygon points="5 3 19 12 5 21 5 3"/>
+        </svg>
+        Guided Demo
+      </button>
+    </div>
+  </header>
+
+  <!-- ========================================================================
+       PRIMARY TAB NAVIGATION
+       ======================================================================== -->
+  <nav class="tabs" role="tablist">
+    <button class="tab-btn active" data-tab="tab-overview" role="tab">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+      1. Executive Overview & Pipeline
+    </button>
+    <button class="tab-btn" data-tab="tab-battery" role="tab">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="1" y="6" width="18" height="12" rx="2"/><line x1="23" y1="11" x2="23" y2="13"/></svg>
+      2. Battery Lab & Simulation
+    </button>
+    <button class="tab-btn" data-tab="tab-trace" role="tab">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+      3. Record Explorer
+    </button>
+    <button class="tab-btn" data-tab="tab-security" role="tab">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+      4. Security & Cryptographic Limits
+    </button>
+    <button class="tab-btn" data-tab="tab-history" role="tab">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+      5. Run History & Exports
+    </button>
+  </nav>
+
+  <!-- ========================================================================
+       MAIN APP CONTENT CONTAINER
+       ======================================================================== -->
+  <main class="content">
+
+    <!-- ======================================================================
+         TAB 1: EXECUTIVE OVERVIEW & LIVE PIPELINE
+         ====================================================================== -->
+    <div id="tab-overview" class="tab-pane active">
+
+      <!-- Executive Summary / Hero Banner -->
+      <section class="hero-banner">
+        <div class="hero-headline">
+          <h2>Protect sensitive healthcare data. <span class="gradient-text">Evaluate the cost.</span></h2>
+          <p>
+            An adaptive edge architecture that classifies patient telemetry by clinical urgency: routing critical cardiac vitals to authenticated <strong>AES-256-GCM</strong>, while routine step counts use lightweight experimental stream ciphers to evaluate energy and latency trade-offs on battery-constrained nodes.
+          </p>
+        </div>
+        <div style="display:flex;gap:0.75rem;align-items:center;">
+          <button id="hero-btn-compare" class="btn btn-compare">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+            Run Paired Benchmark
+          </button>
+        </div>
+      </section>
+
+      <!-- 4 Real Dynamic KPI Cards -->
+      <section class="kpi-grid">
+        <!-- KPI 1: Records Processed -->
+        <div class="kpi-card">
+          <div class="kpi-header">
+            <span class="kpi-title">Records Processed</span>
+            <span class="kpi-tooltip-icon" title="Total synthetic telemetry records generated and routed in current batch">&#9432;</span>
+          </div>
+          <div class="kpi-value-row">
+            <span id="kpi-records-val" class="kpi-main-val">0</span>
+            <span id="kpi-records-unit" style="font-size:0.85rem;color:var(--text-muted);">records</span>
+          </div>
+          <div class="kpi-sub-text">
+            <span>High: <strong id="stat-high-count" style="color:var(--status-danger);">0</strong></span> &bull; 
+            <span>Routine: <strong id="stat-low-count" style="color:var(--accent-cyan);">0</strong></span>
+          </div>
+        </div>
+
+        <!-- KPI 2: Security & Transmission Integrity -->
+        <div class="kpi-card">
+          <div class="kpi-header">
+            <span class="kpi-title">Security & Transmission</span>
+            <span class="kpi-tooltip-icon" title="Transmission Success Rate (TSR) and Packet Loss Rate (PLR) verified by clinical receiver">&#9432;</span>
+          </div>
+          <div class="kpi-value-row">
+            <span id="stat-tsr" class="kpi-main-val" style="color:var(--status-success);">100%</span>
+            <span style="font-size:0.85rem;color:var(--text-muted);">TSR</span>
+          </div>
+          <div class="kpi-sub-text">
+            <span>Loss (PLR): <strong id="stat-plr">0.0%</strong></span> &bull; 
+            <span>Tamper Rejected: <strong id="stat-rejected">0</strong></span>
+          </div>
+        </div>
+
+        <!-- KPI 3: Encryption Latency -->
+        <div class="kpi-card">
+          <div class="kpi-header">
+            <span class="kpi-title">Encryption Latency</span>
+            <span class="kpi-tooltip-icon" title="Mean encryption time per record isolating pure cryptographic transformation">&#9432;</span>
+          </div>
+          <div class="kpi-value-row">
+            <span id="kpi-latency-val" class="kpi-main-val">&mdash;</span>
+            <span style="font-size:0.85rem;color:var(--text-muted);">ms/rec</span>
+          </div>
+          <div class="kpi-sub-text">
+            <span>Result: <strong id="kpi-latency-delta" class="delta-worse">REGRESSION</strong></span>
+          </div>
+        </div>
+
+        <!-- KPI 4: Normalized Energy -->
+        <div class="kpi-card">
+          <div class="kpi-header">
+            <span class="kpi-title">Energy Consumption</span>
+            <span class="kpi-tooltip-icon" title="Software-estimated electrical energy normalized per 1,000 records">&#9432;</span>
+          </div>
+          <div class="kpi-value-row">
+            <span id="kpi-energy-val" class="kpi-main-val">&mdash;</span>
+            <span style="font-size:0.85rem;color:var(--text-muted);">mJ/1k</span>
+          </div>
+          <div class="kpi-sub-text">
+            <span>Est. Charge: <strong id="kpi-charge-val">&mdash;</strong></span>
+          </div>
+        </div>
+      </section>
+
+      <!-- Interactive 6-Stage Processing Pipeline (FR-04) -->
+      <section class="pipeline-section">
+        <div class="pipeline-header">
+          <h3>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+            Interactive Processing Pipeline Flow (Click any stage to inspect)
+          </h3>
+          <span id="pipeline-status" class="badge badge-low">READY</span>
+        </div>
+
+        <div class="pipeline-flow">
+          <!-- Step 1 -->
+          <div class="pipeline-step" id="step-1" data-step="1">
+            <div class="step-badge">Stage 01</div>
+            <div class="step-title">Data Generation</div>
+            <div class="step-detail" id="meta-gen">Seeded synthetic vitals</div>
+          </div>
+          <!-- Step 2 -->
+          <div class="pipeline-step" id="step-2" data-step="2">
+            <div class="step-badge">Stage 02</div>
+            <div class="step-title">Sensitivity Classifier</div>
+            <div class="step-detail" id="meta-classify">ECG, HR, Temp, Steps</div>
+          </div>
+          <!-- Step 3 -->
+          <div class="pipeline-step" id="step-3" data-step="3">
+            <div class="step-badge">Stage 03</div>
+            <div class="step-title">Cluster Partition</div>
+            <div class="cluster-split-pill">
+              <span class="badge-cluster-high">HIGH</span>
+              <span class="badge-cluster-low">ROUTINE</span>
+            </div>
+          </div>
+          <!-- Step 4 -->
+          <div class="pipeline-step" id="step-4" data-step="4">
+            <div class="step-badge">Stage 04</div>
+            <div class="step-title">Adaptive Cipher</div>
+            <div class="step-detail" id="meta-crypto">AES-256 vs XOR Stream</div>
+          </div>
+          <!-- Step 5 -->
+          <div class="pipeline-step" id="step-5" data-step="5">
+            <div class="step-badge">Stage 05</div>
+            <div class="step-title">Local Receiver</div>
+            <div class="step-detail" id="meta-receiver">Authenticated Ingestion</div>
+          </div>
+          <!-- Step 6 -->
+          <div class="pipeline-step" id="step-6" data-step="6">
+            <div class="step-badge">Stage 06</div>
+            <div class="step-title">Energy Evaluation</div>
+            <div class="step-detail" id="meta-metrics">TSR, PLR, Energy, Timing</div>
+          </div>
+        </div>
+
+        <!-- Clickable Pipeline Stage Inspector Drawer -->
+        <div id="pipeline-stage-drawer" class="pipeline-drawer">
+          <div class="drawer-header">
+            <h4 id="drawer-title">Stage 01: Data Generation</h4>
+            <button id="btn-close-drawer" class="drawer-close">&times;</button>
+          </div>
+          <div class="drawer-content-grid">
+            <div>
+              <p id="drawer-description" style="margin-bottom:0.5rem;"></p>
+              <div style="display:flex;gap:1.5rem;margin-top:0.75rem;">
+                <div><strong>Inputs:</strong> <span id="drawer-inputs" style="color:var(--accent-cyan);"></span></div>
+                <div><strong>Outputs:</strong> <span id="drawer-outputs" style="color:var(--status-success);"></span></div>
+              </div>
+            </div>
+            <div style="border-left:1px solid var(--border-subtle);padding-left:1rem;">
+              <div style="font-size:0.75rem;color:var(--text-muted);text-transform:uppercase;">Faculty Summary</div>
+              <p id="drawer-faculty-note" style="margin-top:0.25rem;font-size:0.8rem;color:var(--text-primary);"></p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Global Workload Configuration Bar -->
+      <section class="controls-bar">
+        <div class="inputs-cluster">
+          <div class="control-field">
+            <label for="input-count">Batch Size:</label>
+            <input type="number" id="input-count" value="50" min="5" max="500" step="5">
+          </div>
+          <div class="control-field">
+            <label for="input-seed">Seed:</label>
+            <input type="number" id="input-seed" value="42" min="0">
+          </div>
+          <div class="control-field">
+            <label for="input-reps">Repetitions:</label>
+            <input type="number" id="input-reps" value="10" min="1" max="50">
+          </div>
+        </div>
+
+        <div class="btn-actions-cluster">
+          <button id="btn-generate" class="btn">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/><polyline points="9 11 12 14 22 4"/></svg>
+            Generate Healthcare Data
+          </button>
+          <button id="btn-run-baseline" class="btn btn-primary">Run Baseline (All AES)</button>
+          <button id="btn-run-adaptive" class="btn" style="border-color:var(--accent-cyan);color:var(--accent-cyan);">Run Adaptive (AES + XOR)</button>
+          <button id="btn-run-compare" class="btn btn-compare">Run Both / Compare (10 Reps)</button>
+          <button id="btn-stop" class="btn btn-danger" disabled>Stop</button>
+          <button id="btn-reset" class="btn">Reset</button>
+          <button id="btn-toggle-advanced" class="btn-toggle-advanced">Advanced Settings &#9662;</button>
+        </div>
+
+        <!-- Collapsible Advanced Settings Panel -->
+        <div id="advanced-config-panel" class="advanced-config-panel">
+          <div class="control-field">
+            <label>Supply Voltage (V):</label>
+            <input type="number" id="cfg-voltage" value="3.3" step="0.1">
+          </div>
+          <div class="control-field">
+            <label>MCU Active (mA):</label>
+            <input type="number" id="cfg-mcu" value="35.0" step="1">
+          </div>
+          <div class="control-field">
+            <label>AES Active (mA):</label>
+            <input type="number" id="cfg-aes-i" value="54.0" step="1">
+          </div>
+          <div class="control-field">
+            <label>XOR Active (mA):</label>
+            <input type="number" id="cfg-xor-i" value="22.0" step="1">
+          </div>
+          <div class="control-field">
+            <label>TX Radio (mA):</label>
+            <input type="number" id="cfg-tx-i" value="85.0" step="1">
+          </div>
+          <div class="control-field">
+            <label>Battery (mAh):</label>
+            <input type="number" id="cfg-battery-mah" value="1200.0" step="100">
+          </div>
+        </div>
+      </section>
+
+      <!-- Grid: Batch Summary & Live Receiver Stats -->
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:1.5rem;margin-bottom:1.5rem;">
+        <div class="card" style="margin-bottom:0;">
+          <div class="card-title">
+            <h3>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg>
+              Batch Distribution & Cluster Partition
+            </h3>
+            <span id="batch-record-count-badge" class="badge badge-aes">0 Records</span>
+          </div>
+          <table class="data-table">
+            <tbody>
+              <tr>
+                <td><strong>High Sensitivity (Diagnostic / Emergencies):</strong></td>
+                <td><span class="badge-cluster-high">CLUSTER-HIGH</span></td>
+                <td>High-risk ECG summaries & abnormal vitals</td>
+              </tr>
+              <tr>
+                <td><strong>Low Sensitivity (Routine Telemetry):</strong></td>
+                <td><span class="badge-cluster-low">CLUSTER-LOW</span></td>
+                <td>Normal vital signs, baseline pulse, step counts</td>
+              </tr>
+              <tr>
+                <td><strong>Baseline Encryption Route:</strong></td>
+                <td colspan="2">100% AES-256-GCM across all records</td>
+              </tr>
+              <tr>
+                <td><strong>Adaptive Encryption Route:</strong></td>
+                <td colspan="2">High &rarr; AES-256-GCM | Low &rarr; Experimental XOR Stream</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="card" style="margin-bottom:0;">
+          <div class="card-title">
+            <h3>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/></svg>
+              Local Healthcare Receiver Verification Status
+            </h3>
+            <span id="receiver-badge" class="badge badge-low">ONLINE</span>
+          </div>
+          <table class="data-table">
+            <tbody>
+              <tr>
+                <td><strong>Records Sent:</strong></td>
+                <td id="stat-sent" style="font-weight:700;">0</td>
+              </tr>
+              <tr>
+                <td><strong>Records Verified & Accepted:</strong></td>
+                <td id="stat-accepted" style="color:var(--status-success);font-weight:700;">0</td>
+              </tr>
+              <tr>
+                <td><strong>Records Rejected (Auth / Integrity Mismatch):</strong></td>
+                <td id="stat-rejected-2" style="color:var(--status-danger);font-weight:700;">0</td>
+              </tr>
+              <tr>
+                <td><strong>Cryptographic Nonce Tracking:</strong></td>
+                <td style="color:var(--accent-cyan);">96-bit Unique Nonces (Zero Reuse)</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Live Interactive Tamper Demonstration Card (FR-10) -->
+      <section class="card" style="border-color:rgba(244,63,94,0.35);">
+        <div class="card-title">
+          <h3>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+            Interactive Tamper Rejection Verification (FR-10)
+          </h3>
+          <span class="badge badge-high">SECURITY INTEGRITY TEST</span>
+        </div>
+        <p style="font-size:0.85rem;color:var(--text-secondary);margin-bottom:1rem;">
+          Demonstrate that ciphertext or authentication tag manipulation triggers immediate cryptographic rejection by the local clinical receiver without exposing secret keys.
+        </p>
+        <div style="display:flex;gap:1rem;align-items:center;flex-wrap:wrap;margin-bottom:1rem;">
+          <div class="control-field">
+            <label for="tamper-algo">Algorithm:</label>
+            <select id="tamper-algo">
+              <option value="AES-256-GCM">AES-256-GCM (Authenticated AEAD)</option>
+              <option value="XOR-EXPERIMENTAL">XOR-EXPERIMENTAL (with HMAC-SHA-256)</option>
+            </select>
+          </div>
+          <div class="control-field">
+            <label for="tamper-target">Mutation Target:</label>
+            <select id="tamper-target">
+              <option value="ciphertext">Ciphertext (Bit flip payload)</option>
+              <option value="tag">Authentication Tag</option>
+              <option value="nonce">Nonce / IV</option>
+            </select>
+          </div>
+          <button id="btn-run-tamper" class="btn btn-danger">Execute Tamper Test</button>
+        </div>
+        <div id="tamper-results" style="display:none;background:var(--bg-app);padding:1rem;border-radius:var(--radius-sm);border:1px solid var(--border-subtle);font-size:0.85rem;font-family:var(--font-mono);"></div>
+      </section>
+
+    </div>
+
+    <!-- ======================================================================
+         TAB 2: BATTERY LAB & SIMULATION (WITH DUAL BATTERY DRAIN SIMULATOR)
+         ====================================================================== -->
+    <div id="tab-battery" class="tab-pane">
+
+      <!-- Interactive Battery Drain Simulation Feature (Special Visual Requirement) -->
+      <section class="battery-sim-container">
+        <div class="battery-sim-header">
+          <div>
+            <h3>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="1" y="6" width="18" height="12" rx="2"/><line x1="23" y1="11" x2="23" y2="13"/></svg>
+              Interactive Battery Drain Simulation (Model-Driven)
+            </h3>
+            <p style="font-size:0.8rem;color:var(--text-secondary);margin-top:0.2rem;">
+              Simulates electrical battery discharge driven directly by the software-model energy consumption of both cryptographic approaches.
+            </p>
+          </div>
+          <span class="sim-disclaimer-tag">SIMULATED BATTERY &mdash; VISUAL DEMONSTRATION ONLY</span>
+        </div>
+
+        <!-- Dual Side-by-Side Battery Visual Meters -->
+        <div class="battery-visual-dual-grid">
+          <!-- Battery Meter 1: Baseline -->
+          <div class="battery-unit-card" id="battery-card-baseline">
+            <div class="battery-unit-title">1. Baseline (100% AES-256-GCM)</div>
+            
+            <div class="battery-svg-wrapper">
+              <svg class="battery-svg" viewBox="0 0 220 90">
+                <!-- Battery Outer Shell -->
+                <rect x="5" y="5" width="190" height="80" rx="10" ry="10" fill="#0f172a" stroke="#334155" stroke-width="4"/>
+                <!-- Positive Terminal -->
+                <rect x="195" y="28" width="16" height="34" rx="4" ry="4" fill="#334155"/>
+                <!-- Fill Bar (animated width) -->
+                <rect id="battery-fill-baseline" class="battery-fill-rect" x="12" y="12" width="176" height="66" rx="6" ry="6" fill="#10b981"/>
+              </svg>
+              <div class="battery-discharge-glow"></div>
+            </div>
+
+            <div class="battery-readout-row">
+              <span id="battery-pct-baseline" class="battery-percentage-text">100.0%</span>
+              <span class="battery-energy-stat">(<span id="battery-j-baseline">0.000000</span> J)</span>
+            </div>
+            <span id="battery-status-baseline" class="battery-status-tag" style="background:var(--bg-surface-2);color:var(--text-secondary);">READY</span>
+          </div>
+
+          <!-- Battery Meter 2: Adaptive Proposal -->
+          <div class="battery-unit-card" id="battery-card-adaptive">
+            <div class="battery-unit-title">2. Proposed Adaptive (AES + XOR)</div>
+            
+            <div class="battery-svg-wrapper">
+              <svg class="battery-svg" viewBox="0 0 220 90">
+                <!-- Battery Outer Shell -->
+                <rect x="5" y="5" width="190" height="80" rx="10" ry="10" fill="#0f172a" stroke="#334155" stroke-width="4"/>
+                <!-- Positive Terminal -->
+                <rect x="195" y="28" width="16" height="34" rx="4" ry="4" fill="#334155"/>
+                <!-- Fill Bar (animated width) -->
+                <rect id="battery-fill-adaptive" class="battery-fill-rect" x="12" y="12" width="176" height="66" rx="6" ry="6" fill="#10b981"/>
+              </svg>
+              <div class="battery-discharge-glow"></div>
+            </div>
+
+            <div class="battery-readout-row">
+              <span id="battery-pct-adaptive" class="battery-percentage-text">100.0%</span>
+              <span class="battery-energy-stat">(<span id="battery-j-adaptive">0.000000</span> J)</span>
+            </div>
+            <span id="battery-status-adaptive" class="battery-status-tag" style="background:var(--bg-surface-2);color:var(--text-secondary);">READY</span>
+          </div>
+        </div>
+
+        <!-- Simulation Interactive Controls Strip -->
+        <div class="battery-controls-strip">
+          <div class="sim-buttons-group">
+            <button id="btn-battery-start-demo" class="btn btn-compare">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+              Start Simulation Demo
+            </button>
+            <button id="btn-battery-pause" class="btn" disabled>Pause</button>
+            <button id="btn-battery-resume" class="btn" disabled>Resume</button>
+            <button id="btn-battery-reset" class="btn">Reset Battery</button>
+          </div>
+
+          <div style="display:flex;align-items:center;gap:0.75rem;">
+            <label for="sim-scale-select" style="font-size:0.78rem;color:var(--text-secondary);">Visual Presentation Scale:</label>
+            <select id="sim-scale-select" style="background:var(--bg-surface-1);border:1px solid var(--border-subtle);color:#fff;border-radius:var(--radius-sm);padding:0.3rem 0.5rem;font-size:0.8rem;">
+              <option value="50">50x Noticeable Presentation Drain (Recommended)</option>
+              <option value="10">10x Subtle Drain</option>
+              <option value="1">1x Real Physics Scale (Very Small Drop)</option>
+            </select>
+          </div>
+        </div>
+      </section>
+
+      <!-- Baseline vs Adaptive Comprehensive Performance Comparison Section -->
+      <section class="card">
+        <div class="card-title">
+          <h3>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+            Baseline vs. Adaptive Performance Audit (10 Repetitions)
+          </h3>
+          <div style="display:flex;gap:0.5rem;align-items:center;">
+            <span id="overall-status-badge" class="badge status-badge-regression">STATUS: REGRESSION</span>
+            <span id="comparison-provenance-badge" class="badge badge-aes">ESTIMATED</span>
+          </div>
+        </div>
+
+        <div style="background:rgba(244,63,94,0.08);border:1px solid rgba(244,63,94,0.3);border-radius:var(--radius-md);padding:0.85rem 1rem;font-size:0.85rem;color:#fecdd3;margin-bottom:1.25rem;">
+          <strong>Faculty Technical Assessment:</strong> On this x86-64 host workstation, the adaptive proposal exhibits a <strong>REGRESSION (+125% to +336% latency increase)</strong>. OpenSSL AES-256-GCM is accelerated in silicon by hardware AES-NI instructions, whereas Python-interpreted bitwise XOR loops incur interpreter overhead. Microcontroller savings only manifest on bare-metal targets without crypto accelerators.
+        </div>
+
+        <div style="overflow-x:auto;">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Measurement Metric</th>
+                <th>Baseline (All AES-256-GCM)</th>
+                <th>Proposed Adaptive (AES + XOR)</th>
+                <th>Comparative Delta</th>
+                <th>Assessment Direction</th>
+              </tr>
+            </thead>
+            <tbody id="comparison-table-body">
+              <tr>
+                <td>Encryption Mode</td>
+                <td>AES-256-GCM for 100% records</td>
+                <td>AES (High) + XOR (Routine)</td>
+                <td>&mdash;</td>
+                <td>Hybrid Routing</td>
+              </tr>
+              <tr>
+                <td>Mean Encryption Time (per record)</td>
+                <td id="comp-base-enc">&mdash;</td>
+                <td id="comp-adapt-enc">&mdash;</td>
+                <td id="comp-delta-enc">&mdash;</td>
+                <td id="comp-dir-enc">&mdash;</td>
+              </tr>
+              <tr>
+                <td>Median Encryption Time (per record)</td>
+                <td id="comp-base-median">&mdash;</td>
+                <td id="comp-adapt-median">&mdash;</td>
+                <td id="comp-delta-median">&mdash;</td>
+                <td id="comp-dir-median">&mdash;</td>
+              </tr>
+              <tr>
+                <td>P95 Encryption Latency</td>
+                <td id="comp-base-p95">&mdash;</td>
+                <td id="comp-adapt-p95">&mdash;</td>
+                <td id="comp-delta-p95">&mdash;</td>
+                <td id="comp-dir-p95">&mdash;</td>
+              </tr>
+              <tr>
+                <td>Total Batch Energy</td>
+                <td id="comp-base-energy">&mdash;</td>
+                <td id="comp-adapt-energy">&mdash;</td>
+                <td id="comp-delta-energy">&mdash;</td>
+                <td id="comp-dir-energy">&mdash;</td>
+              </tr>
+              <tr>
+                <td>Percentage Energy Saving (%)</td>
+                <td>Reference Baseline</td>
+                <td id="comp-adapt-saving">&mdash;</td>
+                <td id="comp-delta-saving">&mdash;</td>
+                <td id="comp-dir-saving">&mdash;</td>
+              </tr>
+              <tr>
+                <td>Energy per Record</td>
+                <td id="comp-base-energy-rec">&mdash;</td>
+                <td id="comp-adapt-energy-rec">&mdash;</td>
+                <td id="comp-delta-energy-rec">&mdash;</td>
+                <td id="comp-dir-energy-rec">&mdash;</td>
+              </tr>
+              <tr>
+                <td>Energy per 1,000 Records</td>
+                <td id="comp-base-e1k">&mdash;</td>
+                <td id="comp-adapt-e1k">&mdash;</td>
+                <td id="comp-delta-e1k">&mdash;</td>
+                <td id="comp-dir-e1k">&mdash;</td>
+              </tr>
+              <tr>
+                <td>Mean Operating Current</td>
+                <td id="comp-base-curr">&mdash;</td>
+                <td id="comp-adapt-curr">&mdash;</td>
+                <td id="comp-delta-curr">&mdash;</td>
+                <td id="comp-dir-curr">&mdash;</td>
+              </tr>
+              <tr>
+                <td>Estimated Charge Consumed (mAh)</td>
+                <td id="comp-base-charge">&mdash;</td>
+                <td id="comp-adapt-charge">&mdash;</td>
+                <td id="comp-delta-charge">&mdash;</td>
+                <td id="comp-dir-charge">&mdash;</td>
+              </tr>
+              <tr>
+                <td>Transmission Success Rate (TSR)</td>
+                <td id="comp-base-tsr">&mdash;</td>
+                <td id="comp-adapt-tsr">&mdash;</td>
+                <td id="comp-delta-tsr">&mdash;</td>
+                <td id="comp-dir-tsr">&mdash;</td>
+              </tr>
+              <tr>
+                <td>Packet Loss Rate (PLR)</td>
+                <td id="comp-base-plr">&mdash;</td>
+                <td id="comp-adapt-plr">&mdash;</td>
+                <td id="comp-delta-plr">&mdash;</td>
+                <td id="comp-dir-plr">&mdash;</td>
+              </tr>
+              <tr>
+                <td>Indicative Battery Runtime (1200 mAh)</td>
+                <td id="comp-base-runtime">&mdash;</td>
+                <td id="comp-adapt-runtime">&mdash;</td>
+                <td id="comp-delta-runtime">&mdash;</td>
+                <td id="comp-dir-runtime">&mdash;</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- Visual Comparative Bars -->
+        <div style="margin-top:2rem;">
+          <h4 style="font-size:0.95rem;margin-bottom:0.75rem;">Visual Energy & Latency Comparison</h4>
+
+          <div style="margin-bottom:1rem;">
+            <div style="font-size:0.8rem;color:var(--text-muted);margin-bottom:0.3rem;">Mean Encryption Time (ms/record):</div>
+            <div style="display:flex;align-items:center;gap:0.75rem;margin-bottom:0.4rem;">
+              <span style="width:130px;font-size:0.8rem;color:var(--text-secondary);">Baseline (AES):</span>
+              <div style="flex:1;background:var(--bg-surface-2);height:12px;border-radius:6px;overflow:hidden;">
+                <div id="bar-enc-base" style="width:0%;height:100%;background:var(--accent-sky);transition:width 0.4s;"></div>
+              </div>
+              <span id="bar-enc-base-val" style="width:70px;font-size:0.8rem;font-family:var(--font-mono);">0.0 ms</span>
+            </div>
+            <div style="display:flex;align-items:center;gap:0.75rem;">
+              <span style="width:130px;font-size:0.8rem;color:var(--text-secondary);">Adaptive (Hybrid):</span>
+              <div style="flex:1;background:var(--bg-surface-2);height:12px;border-radius:6px;overflow:hidden;">
+                <div id="bar-enc-adapt" style="width:0%;height:100%;background:var(--status-danger);transition:width 0.4s;"></div>
+              </div>
+              <span id="bar-enc-adapt-val" style="width:70px;font-size:0.8rem;font-family:var(--font-mono);">0.0 ms</span>
+            </div>
+          </div>
+
+          <div>
+            <div style="font-size:0.8rem;color:var(--text-muted);margin-bottom:0.3rem;">Total Energy Consumption (Joules):</div>
+            <div style="display:flex;align-items:center;gap:0.75rem;margin-bottom:0.4rem;">
+              <span style="width:130px;font-size:0.8rem;color:var(--text-secondary);">Baseline (AES):</span>
+              <div style="flex:1;background:var(--bg-surface-2);height:12px;border-radius:6px;overflow:hidden;">
+                <div id="bar-energy-base" style="width:0%;height:100%;background:var(--accent-sky);transition:width 0.4s;"></div>
+              </div>
+              <span id="bar-energy-base-val" style="width:70px;font-size:0.8rem;font-family:var(--font-mono);">0.0 J</span>
+            </div>
+            <div style="display:flex;align-items:center;gap:0.75rem;">
+              <span style="width:130px;font-size:0.8rem;color:var(--text-secondary);">Adaptive (Hybrid):</span>
+              <div style="flex:1;background:var(--bg-surface-2);height:12px;border-radius:6px;overflow:hidden;">
+                <div id="bar-energy-adapt" style="width:0%;height:100%;background:var(--status-danger);transition:width 0.4s;"></div>
+              </div>
+              <span id="bar-energy-adapt-val" style="width:70px;font-size:0.8rem;font-family:var(--font-mono);">0.0 J</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- External Instrument CSV Importer (FR-14) -->
+      <section class="card">
+        <div class="card-title">
+          <h3>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+            Mode B: Import Physical Instrument Power Log (CSV)
+          </h3>
+          <span class="badge badge-low">LAB HARDWARE INTEGRATION</span>
+        </div>
+        <p style="font-size:0.85rem;color:var(--text-secondary);margin-bottom:1rem;">
+          Upload calibrated CSV power measurements recorded from an external power analyzer (e.g. Monsoon, Otii Arc, Keysight N6705, or calibrated INA219 meter) to compute exact physical numerical integration (P = V &times; I, Energy = &int; P dt).
+        </p>
+        <div style="display:flex;gap:1rem;align-items:center;flex-wrap:wrap;">
+          <input type="file" id="power-csv-file" accept=".csv" style="font-size:0.85rem;">
+          <button id="btn-upload-csv" class="btn btn-primary">Validate & Load Instrument Data</button>
+        </div>
+        <div id="upload-status" style="margin-top:0.75rem;font-size:0.85rem;"></div>
+      </section>
+
+    </div>
+
+    <!-- ======================================================================
+         TAB 3: RECORD EXPLORER
+         ====================================================================== -->
+    <div id="tab-trace" class="tab-pane">
+      <section class="card">
+        <div class="card-title">
+          <h3>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+            Synthetic Patient Telemetry Explorer & Sensitivity Audit
+          </h3>
+          <span id="explorer-records-count-badge" class="badge badge-aes">0 Records</span>
+        </div>
+
+        <!-- Explorer Filters Toolbar -->
+        <div class="explorer-toolbar">
+          <div class="search-input-box">
+            <input type="text" id="search-records-input" placeholder="Search patient ID, vital, or reason...">
+          </div>
+          <div class="filters-group">
+            <div class="control-field">
+              <label for="filter-sensitivity">Sensitivity:</label>
+              <select id="filter-sensitivity">
+                <option value="ALL">All Sensitivities</option>
+                <option value="HIGH">HIGH Only</option>
+                <option value="LOW">LOW Only</option>
+              </select>
+            </div>
+            <div class="control-field">
+              <label for="filter-cluster">Cluster:</label>
+              <select id="filter-cluster">
+                <option value="ALL">All Clusters</option>
+                <option value="CLUSTER-HIGH">CLUSTER-HIGH</option>
+                <option value="CLUSTER-LOW">CLUSTER-LOW</option>
+              </select>
+            </div>
+            <div class="control-field">
+              <label for="filter-vitals">Vital Type:</label>
+              <select id="filter-vitals">
+                <option value="ALL">All Vitals</option>
+                <option value="heart_rate">Heart Rate</option>
+                <option value="ecg_summary">ECG Waveform</option>
+                <option value="temperature">Temperature</option>
+                <option value="step_count">Step Cadence</option>
+              </select>
+            </div>
+            <button id="btn-clear-filters" class="btn">Clear Filters</button>
+          </div>
+        </div>
+
+        <div style="overflow-x:auto;">
+          <table class="data-table" id="records-table">
+            <thead>
+              <tr>
+                <th>Record ID</th>
+                <th>Patient ID</th>
+                <th>Timestamp</th>
+                <th>Vital Type</th>
+                <th>Value</th>
+                <th>Sensitivity</th>
+                <th>Classification Reason</th>
+                <th>Assigned Cluster</th>
+              </tr>
+            </thead>
+            <tbody id="records-table-body">
+              <tr><td colspan="8" style="text-align:center;color:var(--text-muted);">No records generated yet. Click "Generate Healthcare Data" above.</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- Clickable Record Details Slide-Over Drawer -->
+        <div id="record-details-drawer" class="record-drawer-panel">
+          <div class="drawer-header">
+            <h4 id="record-drawer-title">Record Details Inspector</h4>
+            <button id="btn-close-record-drawer" class="drawer-close">&times;</button>
+          </div>
+          <div id="record-drawer-body" style="font-size:0.85rem;line-height:1.6;"></div>
+        </div>
+      </section>
+    </div>
+
+    <!-- ======================================================================
+         TAB 4: SECURITY & CONFIG
+         ====================================================================== -->
+    <div id="tab-security" class="tab-pane">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:1.5rem;">
+        <section class="card">
+          <div class="card-title">
+            <h3>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+              Cryptographic Architecture & Security Boundary
+            </h3>
+            <span class="badge badge-aes">NIST STANDARDS</span>
+          </div>
+          <div style="font-size:0.875rem;line-height:1.6;">
+            <p><strong>1. High-Sensitivity Route (AES-256-GCM):</strong></p>
+            <ul style="margin:0.5rem 0 1rem 1.5rem;color:var(--text-secondary);">
+              <li>Uses NIST SP 800-38D compliant Galois/Counter Mode with 256-bit key.</li>
+              <li>Generates a fresh cryptographically secure 96-bit (12-byte) nonce for every encryption operation. Nonce reuse is strictly guarded.</li>
+              <li>Computes a 128-bit authentication tag ensuring confidentiality and tamper resistance.</li>
+            </ul>
+
+            <div style="background:rgba(244,63,94,0.1);border:1px solid rgba(244,63,94,0.3);border-radius:var(--radius-sm);padding:0.75rem;color:#fecdd3;margin-bottom:1rem;">
+              <strong>2. Experimental Lightweight XOR Route Limitations (FR-06):</strong><br>
+              XOR encryption is evaluated strictly as an experimental lightweight research comparison for resource-constrained IoT devices. Bitwise XOR stream operations do <em>not</em> provide production-grade healthcare confidentiality. Under keystream reuse, plaintext recovery attacks are trivial. HMAC-SHA-256 provides integrity authentication only and does not fix XOR's inherent confidentiality limitations.
+            </div>
+
+            <p style="margin-top:1rem;"><strong>3. Key Storage & Privacy Policy (NFR-02):</strong></p>
+            <ul style="margin:0.5rem 0 1rem 1.5rem;color:var(--text-secondary);">
+              <li>Keys are never embedded in frontend code, DOM assets, or exported reports.</li>
+              <li>Development keys are generated ephemerally in memory at startup.</li>
+              <li>All telemetry is synthetic; no patient data leaves the local workstation.</li>
+            </ul>
+          </div>
+        </section>
+
+        <section class="card">
+          <div class="card-title">
+            <h3>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+              Software Power Model Configuration (FR-15)
+            </h3>
+            <button id="btn-save-power-config" class="btn btn-primary">Save Parameters</button>
+          </div>
+          <p style="font-size:0.85rem;color:var(--text-secondary);margin-bottom:1rem;">
+            Configure parameters used when computing software-estimated energy consumption in the absence of a live physical current sensor.
+          </p>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;font-size:0.85rem;">
+            <div>
+              <label>Supply Voltage (V):</label>
+              <input type="number" id="cfg-voltage-tab" step="0.1" value="3.3" style="width:100%;padding:0.3rem;background:var(--bg-surface-2);color:#fff;border:1px solid var(--border-subtle);border-radius:4px;">
+            </div>
+            <div>
+              <label>MCU Active Current (mA):</label>
+              <input type="number" id="cfg-mcu-tab" step="1" value="35.0" style="width:100%;padding:0.3rem;background:var(--bg-surface-2);color:#fff;border:1px solid var(--border-subtle);border-radius:4px;">
+            </div>
+            <div>
+              <label>AES Crypto Current (mA):</label>
+              <input type="number" id="cfg-aes-tab" step="1" value="54.0" style="width:100%;padding:0.3rem;background:var(--bg-surface-2);color:#fff;border:1px solid var(--border-subtle);border-radius:4px;">
+            </div>
+            <div>
+              <label>XOR Crypto Current (mA):</label>
+              <input type="number" id="cfg-xor-tab" step="1" value="22.0" style="width:100%;padding:0.3rem;background:var(--bg-surface-2);color:#fff;border:1px solid var(--border-subtle);border-radius:4px;">
+            </div>
+            <div>
+              <label>TX Radio Current (mA):</label>
+              <input type="number" id="cfg-tx-tab" step="1" value="85.0" style="width:100%;padding:0.3rem;background:var(--bg-surface-2);color:#fff;border:1px solid var(--border-subtle);border-radius:4px;">
+            </div>
+            <div>
+              <label>Battery Capacity (mAh):</label>
+              <input type="number" id="cfg-battery-tab" step="100" value="1200.0" style="width:100%;padding:0.3rem;background:var(--bg-surface-2);color:#fff;border:1px solid var(--border-subtle);border-radius:4px;">
+            </div>
+          </div>
+          <div id="cfg-status" style="margin-top:0.75rem;font-size:0.8rem;color:var(--status-success);"></div>
+        </section>
+      </div>
+    </div>
+
+    <!-- ======================================================================
+         TAB 5: RUN HISTORY & EXPORTS
+         ====================================================================== -->
+    <div id="tab-history" class="tab-pane">
+      <section class="card">
+        <div class="card-title">
+          <h3>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+            Benchmark Execution History & Results Export (FR-20)
+          </h3>
+          <button id="btn-refresh-history" class="btn">Refresh List</button>
+        </div>
+        <div style="overflow-x:auto;">
+          <table class="data-table" id="history-table">
+            <thead>
+              <tr>
+                <th>Run ID</th>
+                <th>Mode</th>
+                <th>Records</th>
+                <th>Source</th>
+                <th>Mean Enc (ms)</th>
+                <th>Total Energy (J)</th>
+                <th>TSR</th>
+                <th>PLR</th>
+                <th>Started At</th>
+                <th>Export Actions</th>
+              </tr>
+            </thead>
+            <tbody id="history-table-body">
+              <tr><td colspan="10" style="text-align:center;color:var(--text-muted);">No runs recorded in database.</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div style="margin-top:1.5rem;" class="card">
+          <h4 style="font-size:0.95rem;margin-bottom:0.5rem;color:#fff;">Automated Evaluator Summary (FR-25)</h4>
+          <div id="evaluator-summary" style="font-size:0.85rem;color:var(--text-secondary);line-height:1.6;">
+            Execute a comparison benchmark above to generate a traceable, evidence-based performance summary.
+          </div>
+        </div>
+      </section>
+    </div>
+
+  </main>
+
+  <!-- ========================================================================
+       GUIDED DEMO WALKTHROUGH MODAL (PHASE 4)
+       ======================================================================== -->
+  <div id="guided-modal-backdrop" class="guided-modal-backdrop">
+    <div class="guided-modal-box">
+      <div class="guided-modal-header">
+        <div class="guided-step-counter" id="guided-step-indicator">Step 1 of 8</div>
+        <button id="btn-guided-exit" class="drawer-close" title="Exit Guided Demo">&times;</button>
+      </div>
+      <div class="guided-modal-body">
+        <h3 class="guided-step-title" id="guided-title">1. Generate Healthcare Vitals Data</h3>
+        <p class="guided-step-explanation" id="guided-explanation">
+          We generate a deterministic batch of synthetic cardiac and physiological records (Heart Rate, ECG summaries, Temperature, Steps).
+        </p>
+        <div id="guided-live-box" class="guided-live-result-box">
+          Ready to begin. Click 'Execute Step' below.
+        </div>
+      </div>
+      <div class="guided-modal-footer">
+        <div>
+          <button id="btn-guided-back" class="btn" disabled>Back</button>
+          <button id="btn-guided-restart" class="btn">Restart</button>
+        </div>
+        <button id="btn-guided-next" class="btn btn-compare">Execute Step</button>
+      </div>
+    </div>
+  </div>
+
+  <footer style="text-align:center;padding:1.5rem;font-size:0.78rem;color:var(--text-muted);border-top:1px solid var(--border-subtle);">
+    ClusterGuard &bull; Cluster-Based IoT Healthcare Security & Energy Lab &bull; Python 3.14 + FastAPI &bull; 100% Local Offline Execution &bull; All Data Strictly Synthetic
+  </footer>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
