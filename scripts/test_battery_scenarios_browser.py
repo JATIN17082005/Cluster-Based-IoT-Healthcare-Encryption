@@ -67,7 +67,7 @@ def run_battery_scenarios_browser_test():
 
         summary_badge = page.locator("#scenario-summary-status-badge").inner_text().strip()
         print(f"   Scenario summary badge: '{summary_badge}'")
-        assert "SAVING" in summary_badge
+        assert "MODEL PREDICTS LOWER ENERGY" in summary_badge
 
         # 4. Test Simulation Animation in Scenario B with Pause and Resume
         print("4. Testing Simulation Controls in Scenario B...")
@@ -98,8 +98,8 @@ def run_battery_scenarios_browser_test():
         print(f"   Status after resume: '{status_resumed}'")
         assert "DISCHARGING" in status_resumed
 
-        # Wait for completion (STEPS=30 * 100ms = ~3.0s)
-        time.sleep(3.2)
+        # Wait for completion (STEPS=100 * 100ms = ~10.0s)
+        page.wait_for_selector("#btn-battery-start-demo:not([disabled])", timeout=15000)
 
         final_base_pct = float(page.locator("#battery-pct-baseline").inner_text().replace("%", ""))
         final_adapt_pct = float(page.locator("#battery-pct-adaptive").inner_text().replace("%", ""))
@@ -108,8 +108,10 @@ def run_battery_scenarios_browser_test():
         # In Scenario B, Adaptive consumes LESS energy, so final adaptive charge must be GREATER than baseline
         assert final_adapt_pct > final_base_pct
         status_adapt_final = page.locator("#battery-status-adaptive").inner_text().strip()
-        print(f"   Scenario B Adaptive outcome tag: '{status_adapt_final}'")
-        assert "SAVING VERIFIED" in status_adapt_final
+        status_base_final = page.locator("#battery-status-baseline").inner_text().strip()
+        print(f"   Scenario B Adaptive outcome tag: '{status_adapt_final}', Baseline: '{status_base_final}'")
+        assert "MODEL PREDICTS LOWER ENERGY" in status_adapt_final
+        assert "DEPLETED MORE" in status_base_final
 
         # Screenshot Scenario B Completed
         scen_b_png = os.path.join(SCREENSHOT_DIR, "battery_sim_scenario_b_completed.png")
@@ -140,8 +142,8 @@ def run_battery_scenarios_browser_test():
         # Run Desktop Simulation Demo
         print("   Running Desktop Scenario Simulation Demo...")
         btn_start.click()
-        # Allow paired benchmark comparison + animation
-        time.sleep(5.0)
+        # Allow paired benchmark comparison + 10s animation
+        page.wait_for_selector("#btn-battery-start-demo:not([disabled])", timeout=25000)
 
         final_a_base_pct = float(page.locator("#battery-pct-baseline").inner_text().replace("%", ""))
         final_a_adapt_pct = float(page.locator("#battery-pct-adaptive").inner_text().replace("%", ""))
@@ -150,8 +152,10 @@ def run_battery_scenarios_browser_test():
         # In Scenario A (Desktop with AES-NI), Adaptive exhibits regression (consumes slightly more energy)
         # So final adaptive charge is <= baseline charge (drained more or equal within resolution)
         status_a_adapt = page.locator("#battery-status-adaptive").inner_text().strip()
-        print(f"   Scenario A Adaptive outcome tag: '{status_a_adapt}'")
-        assert "REGRESSION" in status_a_adapt
+        status_a_base = page.locator("#battery-status-baseline").inner_text().strip()
+        print(f"   Scenario A Adaptive outcome tag: '{status_a_adapt}', Baseline: '{status_a_base}'")
+        assert "MODEL PREDICTS HIGHER ENERGY" in status_a_adapt
+        assert "DEPLETED LESS" in status_a_base
 
         # Screenshot Scenario A Completed
         scen_a_png = os.path.join(SCREENSHOT_DIR, "battery_sim_scenario_a_completed.png")
@@ -175,6 +179,41 @@ def run_battery_scenarios_browser_test():
         scen_drawer_png = os.path.join(SCREENSHOT_DIR, "battery_sim_mcu_params_drawer.png")
         page.screenshot(path=scen_drawer_png)
         print(f"   [OK] Screenshot saved to: {scen_drawer_png}")
+
+        # 8. Test Custom MCU Parameters: Configure a REGRESSION scenario
+        print("8. Testing Custom MCU Parameters that produce a REGRESSION...")
+        # Set software AES to be extremely fast (0.20 ms) and HMAC overhead to be heavy (2.50 ms)
+        page.fill("#mcu-t-aes", "0.20")
+        page.fill("#mcu-t-hmac", "2.50")
+        page.click("#btn-apply-mcu-config")
+        page.locator("#scenario-summary-status-badge:has-text('MODEL PREDICTS HIGHER ENERGY')").wait_for(timeout=10000)
+
+        summary_badge_reg = page.locator("#scenario-summary-status-badge").inner_text().strip()
+        print(f"   Updated MCU summary badge with regression params: '{summary_badge_reg}'")
+        assert "MODEL PREDICTS HIGHER ENERGY" in summary_badge_reg
+
+        # Run Simulation with regression parameters
+        btn_start.click()
+        page.wait_for_selector("#btn-battery-start-demo:not([disabled])", timeout=15000)
+
+        status_mcu_reg_adapt = page.locator("#battery-status-adaptive").inner_text().strip()
+        status_mcu_reg_base = page.locator("#battery-status-baseline").inner_text().strip()
+        print(f"   Custom MCU regression outcome -> Adaptive: '{status_mcu_reg_adapt}', Baseline: '{status_mcu_reg_base}'")
+        assert "MODEL PREDICTS HIGHER ENERGY" in status_mcu_reg_adapt
+        assert "DEPLETED LESS" in status_mcu_reg_base
+
+        # Screenshot MCU Regression Verified
+        scen_reg_png = os.path.join(SCREENSHOT_DIR, "battery_sim_mcu_regression_verified.png")
+        page.screenshot(path=scen_reg_png)
+        print(f"   [OK] Screenshot saved to: {scen_reg_png}")
+
+        # Reset MCU defaults
+        print("   Resetting MCU defaults...")
+        page.click("#btn-reset-mcu-defaults")
+        page.locator("#scenario-summary-status-badge:has-text('MODEL PREDICTS LOWER ENERGY')").wait_for(timeout=10000)
+        summary_badge_reset = page.locator("#scenario-summary-status-badge").inner_text().strip()
+        print(f"   Reset MCU summary badge: '{summary_badge_reset}'")
+        assert "MODEL PREDICTS LOWER ENERGY" in summary_badge_reset
 
         # Verify no severe page errors
         critical_errors = [e for e in page_errors if "favicon" not in e.lower()]

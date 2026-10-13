@@ -587,10 +587,10 @@
           <div style="display:flex;align-items:center;gap:0.75rem;">
             <label for="sim-scale-select" style="font-size:0.78rem;color:var(--text-secondary);">Visual Presentation Scale:</label>
             <select id="sim-scale-select" style="background:var(--bg-surface-1);border:1px solid var(--border-subtle);color:#fff;border-radius:var(--radius-sm);padding:0.3rem 0.5rem;font-size:0.8rem;">
-              <option value="50">50x Noticeable Presentation Drain (Recommended)</option>
-              <option value="100">100x Accelerated Demo Drain</option>
-              <option value="10">10x Subtle Drain</option>
-              <option value="1">1x Real Physics Scale (Very Small Drop)</option>
+              <option value="50" selected>Noticeable 10-Second Demo (~40% Visual Drain, Recommended)</option>
+              <option value="80">Fast Presentation Drain (~60% Visual Drain)</option>
+              <option value="20">Subtle Drain (~15% Visual Drain)</option>
+              <option value="1">1x Physics Scale (Unaccelerated Micro-Discharge)</option>
             </select>
           </div>
         </div>
@@ -599,7 +599,7 @@
         <div id="battery-scenario-summary-card" style="margin-top:1.25rem;background:var(--bg-surface-2);border:1px solid var(--border-subtle);border-radius:var(--radius-md);padding:1rem 1.25rem;">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.75rem;flex-wrap:wrap;gap:0.5rem;">
             <h4 style="font-size:0.88rem;font-weight:600;color:#fff;margin:0;">Active Hardware Scenario Comparison</h4>
-            <span id="scenario-summary-status-badge" class="badge badge-success">SAVING (+6.63%)</span>
+            <span id="scenario-summary-status-badge" class="badge badge-success">MODEL PREDICTS LOWER ENERGY (+6.63%)</span>
           </div>
           <div style="overflow-x:auto;">
             <table class="data-table" style="font-size:0.82rem;">

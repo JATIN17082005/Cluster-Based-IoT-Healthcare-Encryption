@@ -39,6 +39,24 @@ document.addEventListener("DOMContentLoaded", () => {
   let guidedStep = 1;
   const TOTAL_GUIDED_STEPS = 8;
 
+  function showToast(message, type = "info") {
+    console.log(`[Toast ${type}] ${message}`);
+    let toastEl = document.getElementById("app-toast-notification");
+    if (!toastEl) {
+      toastEl = document.createElement("div");
+      toastEl.id = "app-toast-notification";
+      toastEl.style.cssText = "position:fixed;bottom:24px;right:24px;z-index:9999;padding:10px 18px;border-radius:6px;font-size:0.85rem;font-weight:600;box-shadow:0 4px 16px rgba(0,0,0,0.5);transition:opacity 0.3s ease;pointer-events:none;color:#fff;";
+      document.body.appendChild(toastEl);
+    }
+    toastEl.textContent = message;
+    toastEl.style.background = type === "danger" ? "#e11d48" : type === "warning" ? "#d97706" : "#0284c7";
+    toastEl.style.opacity = "1";
+    clearTimeout(toastEl._timer);
+    toastEl._timer = setTimeout(() => {
+      toastEl.style.opacity = "0";
+    }, 3000);
+  }
+
   // =========================================================================
   // DOM Elements Selection
   // =========================================================================
@@ -750,13 +768,19 @@ document.addEventListener("DOMContentLoaded", () => {
       batteryFillBaseline.setAttribute("width", fillWidth.toFixed(1));
       batteryFillBaseline.setAttribute("fill", fillColor);
       batteryPctBaseline.textContent = `${clampedPct.toFixed(1)}%`;
-      if (batteryMahBaseline) batteryMahBaseline.textContent = `(${clampedMah.toFixed(2)} mAh)`;
+      if (batteryMahBaseline) {
+        const mahDisp = (clampedMah % 1 === 0) ? clampedMah.toFixed(2) : clampedMah.toFixed(3);
+        batteryMahBaseline.textContent = `(${mahDisp} mAh)`;
+      }
       batteryJBaseline.textContent = joules.toFixed(6);
     } else {
       batteryFillAdaptive.setAttribute("width", fillWidth.toFixed(1));
       batteryFillAdaptive.setAttribute("fill", fillColor);
       batteryPctAdaptive.textContent = `${clampedPct.toFixed(1)}%`;
-      if (batteryMahAdaptive) batteryMahAdaptive.textContent = `(${clampedMah.toFixed(2)} mAh)`;
+      if (batteryMahAdaptive) {
+        const mahDisp = (clampedMah % 1 === 0) ? clampedMah.toFixed(2) : clampedMah.toFixed(3);
+        batteryMahAdaptive.textContent = `(${mahDisp} mAh)`;
+      }
       batteryJAdaptive.textContent = joules.toFixed(6);
     }
   }
@@ -838,13 +862,29 @@ document.addEventListener("DOMContentLoaded", () => {
         simSumDeltaHours.textContent = `${hDelta >= 0 ? "+" : ""}${hDelta.toFixed(1)} hrs`;
       }
       if (simSumDirHours) {
-        simSumDirHours.textContent = "EXTENDED RUNTIME";
-        simSumDirHours.style.color = "var(--status-success)";
+        if (compEnergy.energy_saving_percent > 0.2) {
+          simSumDirHours.textContent = "EXTENDED RUNTIME";
+          simSumDirHours.style.color = "var(--status-success)";
+        } else if (compEnergy.energy_saving_percent < -0.2) {
+          simSumDirHours.textContent = "REDUCED RUNTIME";
+          simSumDirHours.style.color = "var(--status-danger)";
+        } else {
+          simSumDirHours.textContent = "IDENTICAL RUNTIME";
+          simSumDirHours.style.color = "var(--text-secondary)";
+        }
       }
 
       if (scenarioSummaryStatusBadge) {
-        scenarioSummaryStatusBadge.textContent = `SAVING (${compEnergy.energy_saving_percent > 0 ? "+" : ""}${compEnergy.energy_saving_percent.toFixed(2)}%)`;
-        scenarioSummaryStatusBadge.className = "badge badge-low";
+        if (compEnergy.energy_saving_percent > 0.2) {
+          scenarioSummaryStatusBadge.textContent = `MODEL PREDICTS LOWER ENERGY (+${compEnergy.energy_saving_percent.toFixed(2)}%)`;
+          scenarioSummaryStatusBadge.className = "badge badge-low";
+        } else if (compEnergy.energy_saving_percent < -0.2) {
+          scenarioSummaryStatusBadge.textContent = `MODEL PREDICTS HIGHER ENERGY (${compEnergy.energy_saving_percent.toFixed(2)}%)`;
+          scenarioSummaryStatusBadge.className = "badge status-badge-regression";
+        } else {
+          scenarioSummaryStatusBadge.textContent = "IDENTICAL CONSUMPTION (0.00%)";
+          scenarioSummaryStatusBadge.className = "badge badge-aes";
+        }
       }
     } else {
       // Desktop Scenario Summary
@@ -882,8 +922,16 @@ document.addEventListener("DOMContentLoaded", () => {
         }
 
         if (scenarioSummaryStatusBadge) {
-          scenarioSummaryStatusBadge.textContent = "STATUS: REGRESSION (+EXTRA JOULES)";
-          scenarioSummaryStatusBadge.className = "badge status-badge-regression";
+          if (compEnergy.energy_saving_percent > 0.2) {
+            scenarioSummaryStatusBadge.textContent = `MODEL PREDICTS LOWER ENERGY (+${compEnergy.energy_saving_percent.toFixed(2)}%)`;
+            scenarioSummaryStatusBadge.className = "badge badge-low";
+          } else if (compEnergy.energy_saving_percent < -0.2) {
+            scenarioSummaryStatusBadge.textContent = `MODEL PREDICTS HIGHER ENERGY (${compEnergy.energy_saving_percent.toFixed(2)}%)`;
+            scenarioSummaryStatusBadge.className = "badge status-badge-regression";
+          } else {
+            scenarioSummaryStatusBadge.textContent = "IDENTICAL CONSUMPTION (0.00%)";
+            scenarioSummaryStatusBadge.className = "badge badge-aes";
+          }
         }
       }
     }
@@ -1082,9 +1130,9 @@ document.addEventListener("DOMContentLoaded", () => {
 
     // Visual Presentation Scale:
     // Controls animation drop rate only, leaving underlying Joules and mAh exact!
-    const scaleFactor = simState.scale * 200;
-    const baseDrop = Math.min(65.0, (baseTotalJ / totalCapacityJoules) * 100.0 * scaleFactor);
-    const adaptDrop = Math.min(65.0, (adaptTotalJ / totalCapacityJoules) * 100.0 * scaleFactor);
+    const scaleFactor = simState.scale * 6000;
+    const baseDrop = Math.min(85.0, (baseTotalJ / totalCapacityJoules) * 100.0 * scaleFactor);
+    const adaptDrop = Math.min(85.0, (adaptTotalJ / totalCapacityJoules) * 100.0 * scaleFactor);
 
     const targetBasePct = Math.max(5.0, 100.0 - baseDrop);
     const targetAdaptPct = Math.max(5.0, 100.0 - adaptDrop);
@@ -1103,7 +1151,7 @@ document.addEventListener("DOMContentLoaded", () => {
     batteryStatusAdaptive.style.color = "var(--status-danger)";
 
     let progress = 0;
-    const STEPS = 30;
+    const STEPS = 100;
     const intervalMs = 100;
 
     simState.timerId = setInterval(() => {
@@ -1117,8 +1165,10 @@ document.addEventListener("DOMContentLoaded", () => {
       const curAdaptPct = 100.0 - (100.0 - targetAdaptPct) * fraction;
       const curBaseJ = baseTotalJ * fraction;
       const curAdaptJ = adaptTotalJ * fraction;
-      const curBaseMah = nominalMah - (nominalMah * (100.0 - curBasePct) / 100.0);
-      const curAdaptMah = nominalMah - (nominalMah * (100.0 - curAdaptPct) / 100.0);
+      // Underlying charge consumed in mAh strictly derived from Joules / (V * 3.6),
+      // completely independent of visual animation scaling:
+      const curBaseMah = Math.max(0.0, nominalMah - (curBaseJ / (vcc * 3.6)));
+      const curAdaptMah = Math.max(0.0, nominalMah - (curAdaptJ / (vcc * 3.6)));
 
       updateBatteryVisual("baseline", curBasePct, curBaseJ, curBaseMah);
       updateBatteryVisual("adaptive", curAdaptPct, curAdaptJ, curAdaptMah);
@@ -1129,18 +1179,24 @@ document.addEventListener("DOMContentLoaded", () => {
         batteryCardBaseline.classList.remove("discharging");
         batteryCardAdaptive.classList.remove("discharging");
 
-        if (simState.scenario === "desktop") {
-          // On Desktop: adaptive consumes slightly more energy due to interpreter overhead
-          batteryStatusBaseline.textContent = "FINISHED";
-          batteryStatusBaseline.style.color = "var(--status-warning)";
-          batteryStatusAdaptive.textContent = "FINISHED (REGRESSION)";
-          batteryStatusAdaptive.style.color = "var(--status-danger)";
-        } else {
-          // On MCU: adaptive saves energy because software AES is much heavier
+        // Dynamically evaluate energy comparison from actual computed Joules
+        const energySavingPct = baseTotalJ > 0 ? ((baseTotalJ - adaptTotalJ) / baseTotalJ) * 100.0 : 0.0;
+
+        if (energySavingPct > 0.2) {
           batteryStatusBaseline.textContent = "DEPLETED MORE";
           batteryStatusBaseline.style.color = "var(--status-warning)";
-          batteryStatusAdaptive.textContent = "SAVING VERIFIED (+)";
+          batteryStatusAdaptive.textContent = "MODEL PREDICTS LOWER ENERGY";
           batteryStatusAdaptive.style.color = "var(--status-success)";
+        } else if (energySavingPct < -0.2) {
+          batteryStatusBaseline.textContent = "DEPLETED LESS";
+          batteryStatusBaseline.style.color = "var(--status-success)";
+          batteryStatusAdaptive.textContent = "MODEL PREDICTS HIGHER ENERGY";
+          batteryStatusAdaptive.style.color = "var(--status-danger)";
+        } else {
+          batteryStatusBaseline.textContent = "IDENTICAL CONSUMPTION";
+          batteryStatusBaseline.style.color = "var(--text-secondary)";
+          batteryStatusAdaptive.textContent = "IDENTICAL CONSUMPTION";
+          batteryStatusAdaptive.style.color = "var(--text-secondary)";
         }
 
         btnBatteryStartDemo.disabled = false;

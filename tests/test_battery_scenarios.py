@@ -165,22 +165,31 @@ def test_presentation_scale_does_not_change_energy():
     adapt_j = res["adaptive"]["total_energy_joules"]
     saving_pct = res["energy_comparison"]["energy_saving_percent"]
 
-    # Test virtual scale factors: 1x, 10x, 50x, 100x
-    scales = [1, 10, 50, 100]
+    # Test virtual scale factors: 1x, 20x, 50x, 80x
+    scales = [1, 20, 50, 80]
     total_capacity_j = 1200.0 * 3.3 * 3.6  # 14256 Joules
 
     for s in scales:
-        scale_factor = s * 200
-        drop_base = min(65.0, (base_j / total_capacity_j) * 100.0 * scale_factor)
-        drop_adapt = min(65.0, (adapt_j / total_capacity_j) * 100.0 * scale_factor)
+        scale_factor = s * 6000
+        drop_base = min(85.0, (base_j / total_capacity_j) * 100.0 * scale_factor)
+        drop_adapt = min(85.0, (adapt_j / total_capacity_j) * 100.0 * scale_factor)
 
         # In MCU Scenario B: adaptive consumes less, so drop_adapt < drop_base
         assert drop_adapt < drop_base
 
-        # Crucially: Underlying Joules and savings do NOT change with scale factor
+        # At default scale 50: visual drop should be ~35-50%
+        if s == 50:
+            assert 30.0 <= drop_base <= 60.0
+
+        # Crucially: Underlying Joules, charge (mAh), and savings do NOT change with scale factor
         assert res["baseline"]["total_energy_joules"] == base_j
         assert res["adaptive"]["total_energy_joules"] == adapt_j
         assert res["energy_comparison"]["energy_saving_percent"] == saving_pct
+
+        # Physical charge consumed is strictly derived from Joules / (V * 3.6)
+        consumed_mah_base = base_j / (3.3 * 3.6)
+        remaining_mah_base = 1200.0 - consumed_mah_base
+        assert 1199.0 < remaining_mah_base <= 1200.0
 
 
 # --- Test 5: API Endpoints for Scenario B ---
@@ -251,3 +260,54 @@ def test_scenarios_remain_strictly_separated(client):
     # The MCU scenario must have its own distinct label and not alter desktop benchmark results
     assert "SIMULATED TARGET-MCU SCENARIO" in mcu_data["provenance_label"]
     assert "OpenSSL" not in mcu_data["mcu_model"]
+
+
+# --- Test 7: Custom MCU Parameters Improvement and Regression Verification ---
+
+def test_custom_mcu_parameters_improvement_and_regression(client):
+    """Verify custom MCU parameters that produce both an improvement and a regression,
+    verifying that result_status and energy_saving_percent reflect the modeled physics accurately.
+    """
+    # 1. Parameter set producing an IMPROVEMENT (e.g. software AES is heavy, XOR is fast)
+    cfg_improve = McuHardwareScenarioConfig(
+        t_aes_gcm_ms=1.25,
+        t_sha256_keystream_ms=0.25,
+        t_xor_stream_ms=0.01,
+        t_hmac_sha256_ms=0.38,
+    )
+    model_imp = McuEnergyModel(cfg_improve)
+    res_imp = model_imp.calculate_scenario(total_records=100, high_sensitivity_count=45, low_sensitivity_count=55)
+    assert res_imp["energy_comparison"]["result_status"] == "IMPROVEMENT"
+    assert res_imp["energy_comparison"]["energy_saving_percent"] > 0.0
+
+    # 2. Parameter set producing a REGRESSION (e.g. AES is fast, HMAC overhead is heavy)
+    cfg_regress = McuHardwareScenarioConfig(
+        t_aes_gcm_ms=0.20,
+        t_sha256_keystream_ms=0.50,
+        t_xor_stream_ms=0.05,
+        t_hmac_sha256_ms=2.50,
+    )
+    model_reg = McuEnergyModel(cfg_regress)
+    res_reg = model_reg.calculate_scenario(total_records=100, high_sensitivity_count=45, low_sensitivity_count=55)
+    assert res_reg["energy_comparison"]["result_status"] == "REGRESSION"
+    assert res_reg["energy_comparison"]["energy_saving_percent"] < -0.2
+
+    # 3. Test through FastAPI API
+    # Apply regression parameters
+    resp_cfg = client.post("/api/battery/mcu-config", json={
+        "t_aes_gcm_ms": 0.20,
+        "t_sha256_keystream_ms": 0.50,
+        "t_xor_stream_ms": 0.05,
+        "t_hmac_sha256_ms": 2.50,
+    })
+    assert resp_cfg.status_code == 200
+
+    resp_scen = client.get("/api/battery/mcu-scenario")
+    assert resp_scen.status_code == 200
+    scen_data = resp_scen.json()
+    assert scen_data["energy_comparison"]["result_status"] == "REGRESSION"
+    assert scen_data["energy_comparison"]["energy_saving_percent"] < 0.0
+
+    # Reset back to default MCU configuration for subsequent tests
+    client.post("/api/battery/mcu-config", json=McuHardwareScenarioConfig().model_dump())
+
