@@ -130,6 +130,7 @@ class McuHardwareScenarioConfig(BaseModel):
     """
     mcu_model_name: str = "ARM Cortex-M0+ (16 MHz, No AES Hardware)"
     supply_voltage_v: float = 3.3
+    mcu_clock_hz: float = 16_000_000.0  # Configurable MCU CPU clock (default 16 MHz)
     battery_nominal_mah: float = 1200.0
     battery_usable_factor: float = 0.85
 

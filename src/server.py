@@ -137,10 +137,22 @@ def update_mcu_config(cfg_data: Dict[str, Any]):
 
 
 @app.get("/api/battery/mcu-scenario")
-def get_mcu_scenario():
-    """Calculate MCU scenario using current demo records or default 100-record batch."""
+def get_mcu_scenario(
+    record_count: Optional[int] = None,
+    high_count: Optional[int] = None,
+    low_count: Optional[int] = None,
+):
+    """Calculate MCU scenario using query params, current demo records, or default 100-record batch."""
     global current_demo_records, mcu_config
-    if current_demo_records:
+    if record_count is not None:
+        rec_count = max(1, record_count)
+        if high_count is not None and low_count is not None:
+            high_cnt = max(0, high_count)
+            low_cnt = max(0, low_count)
+        else:
+            high_cnt = int(rec_count * 0.45)
+            low_cnt = rec_count - high_cnt
+    elif current_demo_records:
         rec_count = len(current_demo_records)
         high_cnt = sum(1 for r in current_demo_records if r.sensitivity == SensitivityLevel.HIGH)
         low_cnt = rec_count - high_cnt

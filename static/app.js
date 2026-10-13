@@ -173,6 +173,44 @@ document.addEventListener("DOMContentLoaded", () => {
   const simSumDeltaHours = document.getElementById("sim-sum-delta-hours");
   const simSumDirHours = document.getElementById("sim-sum-dir-hours");
 
+  // Physical Battery State Elements
+  const batteryPhysPctBaseline = document.getElementById("battery-phys-pct-baseline");
+  const batteryPhysPctAdaptive = document.getElementById("battery-phys-pct-adaptive");
+
+  // MCU Workload & Sensitivity Controls
+  const mcuClockMhz = document.getElementById("mcu-clock-mhz");
+  const mcuWorkloadTotal = document.getElementById("mcu-workload-total");
+  const mcuWorkloadHigh = document.getElementById("mcu-workload-high");
+  const mcuWorkloadRoutine = document.getElementById("mcu-workload-routine");
+  const mcuWorkloadBalanceStatus = document.getElementById("mcu-workload-balance-status");
+
+  // Dedicated Panel: Cryptographic Computation Elements
+  const cryptoComputationPanel = document.getElementById("crypto-computation-panel");
+  const mcuPanelClockLabel = document.getElementById("mcu-panel-clock-label");
+  const mcuPanelWorkloadLabel = document.getElementById("mcu-panel-workload-label");
+  const cryptoComputationBadge = document.getElementById("crypto-computation-badge");
+
+  const cardCryptoTimeReduction = document.getElementById("card-crypto-time-reduction");
+  const cardCryptoTimeAdapt = document.getElementById("card-crypto-time-adapt");
+  const cardCryptoTimeBase = document.getElementById("card-crypto-time-base");
+  const cardCryptoTimePctBar = document.getElementById("card-crypto-time-pct-bar");
+  const cardCryptoTimeBarFill = document.getElementById("card-crypto-time-bar-fill");
+
+  const cardCryptoCyclesReduction = document.getElementById("card-crypto-cycles-reduction");
+  const cardCryptoCyclesAdapt = document.getElementById("card-crypto-cycles-adapt");
+  const cardCryptoCyclesBase = document.getElementById("card-crypto-cycles-base");
+  const cardCryptoCyclesPctBar = document.getElementById("card-crypto-cycles-pct-bar");
+  const cardCryptoCyclesBarFill = document.getElementById("card-crypto-cycles-bar-fill");
+
+  const cardCryptoEnergyReduction = document.getElementById("card-crypto-energy-reduction");
+  const cardCryptoEnergyAdapt = document.getElementById("card-crypto-energy-adapt");
+  const cardCryptoEnergyBase = document.getElementById("card-crypto-energy-base");
+  const cardCryptoEnergyPctBar = document.getElementById("card-crypto-energy-pct-bar");
+  const cardCryptoEnergyBarFill = document.getElementById("card-crypto-energy-bar-fill");
+
+  const cryptoBreakdownTbody = document.getElementById("crypto-breakdown-tbody");
+  const batchBreakdownTbody = document.getElementById("batch-breakdown-tbody");
+
   // Comparison Tab Elements
   const overallStatusBadge = document.getElementById("overall-status-badge");
   const comparisonProvenanceBadge = document.getElementById("comparison-provenance-badge");
@@ -755,8 +793,9 @@ document.addEventListener("DOMContentLoaded", () => {
     const fillWidth = (clampedPct / 100.0) * MAX_BATTERY_SVG_WIDTH;
     const nominalCap = parseFloat(cfgBatteryMah ? cfgBatteryMah.value : "1200.0") || 1200.0;
     const clampedMah = Math.max(0, Math.min(nominalCap, mah !== undefined ? mah : (nominalCap * clampedPct / 100.0)));
+    const physPct = nominalCap > 0 ? (clampedMah / nominalCap) * 100.0 : 100.0;
 
-    // Determine color based on remaining charge
+    // Determine color based on remaining charge in demonstration meter
     let fillColor = "#10b981"; // Emerald (>50%)
     if (clampedPct < 20) {
       fillColor = "#f43f5e"; // Rose / Red (<20%)
@@ -769,8 +808,10 @@ document.addEventListener("DOMContentLoaded", () => {
       batteryFillBaseline.setAttribute("fill", fillColor);
       batteryPctBaseline.textContent = `${clampedPct.toFixed(1)}%`;
       if (batteryMahBaseline) {
-        const mahDisp = (clampedMah % 1 === 0) ? clampedMah.toFixed(2) : clampedMah.toFixed(3);
-        batteryMahBaseline.textContent = `(${mahDisp} mAh)`;
+        batteryMahBaseline.textContent = `${clampedMah.toFixed(3)} mAh`;
+      }
+      if (batteryPhysPctBaseline) {
+        batteryPhysPctBaseline.textContent = `${physPct.toFixed(3)}%`;
       }
       batteryJBaseline.textContent = joules.toFixed(6);
     } else {
@@ -778,8 +819,10 @@ document.addEventListener("DOMContentLoaded", () => {
       batteryFillAdaptive.setAttribute("fill", fillColor);
       batteryPctAdaptive.textContent = `${clampedPct.toFixed(1)}%`;
       if (batteryMahAdaptive) {
-        const mahDisp = (clampedMah % 1 === 0) ? clampedMah.toFixed(2) : clampedMah.toFixed(3);
-        batteryMahAdaptive.textContent = `(${mahDisp} mAh)`;
+        batteryMahAdaptive.textContent = `${clampedMah.toFixed(3)} mAh`;
+      }
+      if (batteryPhysPctAdaptive) {
+        batteryPhysPctAdaptive.textContent = `${physPct.toFixed(3)}%`;
       }
       batteryJAdaptive.textContent = joules.toFixed(6);
     }
@@ -787,7 +830,12 @@ document.addEventListener("DOMContentLoaded", () => {
 
   function resetBatterySim() {
     if (simState.timerId) clearInterval(simState.timerId);
-    const nominalCap = parseFloat(cfgBatteryMah ? cfgBatteryMah.value : "1200.0") || 1200.0;
+    let nominalCap = 1200.0;
+    if (simState.scenario === "mcu" && simState.lastMcuData && simState.lastMcuData.config) {
+      nominalCap = simState.lastMcuData.config.battery_nominal_mah || 1200.0;
+    } else {
+      nominalCap = parseFloat(cfgBatteryMah ? cfgBatteryMah.value : "1200.0") || 1200.0;
+    }
     simState.baselinePct = 100.0;
     simState.adaptivePct = 100.0;
     simState.baselineJ = 0.0;
@@ -815,9 +863,21 @@ document.addEventListener("DOMContentLoaded", () => {
     if (btnBatteryReplay) btnBatteryReplay.disabled = false;
   }
 
-  async function fetchMcuScenarioData() {
+  async function fetchMcuScenarioData(total, high, routine) {
     try {
-      const resp = await fetch("/api/battery/mcu-scenario");
+      let url = "/api/battery/mcu-scenario";
+      const recTotal = total !== undefined ? total : (mcuWorkloadTotal ? parseInt(mcuWorkloadTotal.value, 10) : 100);
+      const recHigh = high !== undefined ? high : (mcuWorkloadHigh ? parseInt(mcuWorkloadHigh.value, 10) : 45);
+      const recRoutine = routine !== undefined ? routine : (mcuWorkloadRoutine ? parseInt(mcuWorkloadRoutine.value, 10) : 55);
+
+      const params = new URLSearchParams();
+      if (!isNaN(recTotal)) params.set("record_count", recTotal);
+      if (!isNaN(recHigh)) params.set("high_count", recHigh);
+      if (!isNaN(recRoutine)) params.set("low_count", recRoutine);
+      const qs = params.toString();
+      if (qs) url += `?${qs}`;
+
+      const resp = await fetch(url);
       if (!resp.ok) throw new Error("Failed to fetch MCU scenario data");
       const data = await resp.json();
       simState.lastMcuData = data;
@@ -826,6 +886,196 @@ document.addEventListener("DOMContentLoaded", () => {
     } catch (err) {
       console.warn("MCU Scenario fetch error:", err);
       return null;
+    }
+  }
+
+  function renderCryptoComputationPanel(data) {
+    if (!data || !data.baseline || !data.adaptive) return;
+    const base = data.baseline;
+    const adapt = data.adaptive;
+    const compEnergy = data.energy_comparison;
+    const compCryptoTime = data.crypto_time_comparison;
+    const compCryptoCycles = data.crypto_cycles_comparison || data.crypto_time_comparison;
+    const compCryptoEnergy = data.crypto_energy_comparison || data.energy_comparison;
+
+    // Header Labels
+    const clockMhz = (data.config && data.config.mcu_clock_hz) ? (data.config.mcu_clock_hz / 1e6).toFixed(1) : "16.0";
+    if (mcuPanelClockLabel) mcuPanelClockLabel.textContent = `${clockMhz} MHz`;
+    if (mcuPanelWorkloadLabel) {
+      mcuPanelWorkloadLabel.textContent = `${data.record_count} records: ${data.high_sensitivity_count} High / ${data.low_sensitivity_count} Routine`;
+    }
+
+    // Top status badge
+    if (cryptoComputationBadge) {
+      if (compCryptoEnergy.energy_saving_percent > 0.1) {
+        cryptoComputationBadge.textContent = `CRYPTO WORK REDUCTION: -${compCryptoEnergy.energy_saving_percent.toFixed(1)}%`;
+        cryptoComputationBadge.className = "badge badge-low";
+      } else if (compCryptoEnergy.energy_saving_percent < -0.1) {
+        cryptoComputationBadge.textContent = `CRYPTO WORK INCREASE: +${Math.abs(compCryptoEnergy.energy_saving_percent).toFixed(1)}%`;
+        cryptoComputationBadge.className = "badge status-badge-regression";
+      } else {
+        cryptoComputationBadge.textContent = "CRYPTO WORK IDENTICAL: 0.0%";
+        cryptoComputationBadge.className = "badge badge-aes";
+      }
+    }
+
+    // Card 1: Cryptographic Execution Time
+    if (cardCryptoTimeAdapt) cardCryptoTimeAdapt.textContent = `${adapt.crypto_duration_ms.toFixed(3)} ms`;
+    if (cardCryptoTimeBase) cardCryptoTimeBase.textContent = `${base.crypto_duration_ms.toFixed(3)} ms`;
+    if (cardCryptoTimeReduction) {
+      const pctChange = compCryptoTime.percentage_change;
+      cardCryptoTimeReduction.textContent = `${pctChange > 0 ? "+" : ""}${pctChange.toFixed(2)}%`;
+      cardCryptoTimeReduction.className = compCryptoTime.is_improvement ? "badge badge-low" : "badge status-badge-regression";
+    }
+    const pctTime = base.crypto_duration_ms > 0 ? (adapt.crypto_duration_ms / base.crypto_duration_ms) * 100 : 100;
+    if (cardCryptoTimePctBar) cardCryptoTimePctBar.textContent = `${pctTime.toFixed(1)}%`;
+    if (cardCryptoTimeBarFill) {
+      cardCryptoTimeBarFill.style.width = `${Math.min(100, Math.max(5, pctTime)).toFixed(1)}%`;
+      cardCryptoTimeBarFill.style.background = pctTime <= 100 ? "#10b981" : "#f43f5e";
+    }
+
+    // Card 2: Modelled Cryptographic CPU Cycles
+    const cyclesBase = base.crypto_cpu_cycles || (base.crypto_duration_ms * 16000);
+    const cyclesAdapt = adapt.crypto_cpu_cycles || (adapt.crypto_duration_ms * 16000);
+    if (cardCryptoCyclesAdapt) cardCryptoCyclesAdapt.textContent = Math.round(cyclesAdapt).toLocaleString();
+    if (cardCryptoCyclesBase) cardCryptoCyclesBase.textContent = Math.round(cyclesBase).toLocaleString();
+    if (cardCryptoCyclesReduction) {
+      const pctChange = compCryptoCycles.percentage_change;
+      cardCryptoCyclesReduction.textContent = `${pctChange > 0 ? "+" : ""}${pctChange.toFixed(2)}%`;
+      cardCryptoCyclesReduction.className = compCryptoCycles.is_improvement ? "badge badge-low" : "badge status-badge-regression";
+    }
+    const pctCycles = cyclesBase > 0 ? (cyclesAdapt / cyclesBase) * 100 : 100;
+    if (cardCryptoCyclesPctBar) cardCryptoCyclesPctBar.textContent = `${pctCycles.toFixed(1)}%`;
+    if (cardCryptoCyclesBarFill) {
+      cardCryptoCyclesBarFill.style.width = `${Math.min(100, Math.max(5, pctCycles)).toFixed(1)}%`;
+      cardCryptoCyclesBarFill.style.background = pctCycles <= 100 ? "#10b981" : "#f43f5e";
+    }
+
+    // Card 3: Cryptographic Component Energy
+    const eCryptoBaseMj = (base.energy_crypto_joules || 0) * 1000.0;
+    const eCryptoAdaptMj = (adapt.energy_crypto_joules || 0) * 1000.0;
+    if (cardCryptoEnergyAdapt) cardCryptoEnergyAdapt.textContent = `${eCryptoAdaptMj.toFixed(3)} mJ`;
+    if (cardCryptoEnergyBase) cardCryptoEnergyBase.textContent = `${eCryptoBaseMj.toFixed(3)} mJ`;
+    if (cardCryptoEnergyReduction) {
+      const pctChange = compCryptoEnergy.percentage_change;
+      cardCryptoEnergyReduction.textContent = `${pctChange > 0 ? "+" : ""}${pctChange.toFixed(2)}%`;
+      cardCryptoEnergyReduction.className = compCryptoEnergy.is_improvement ? "badge badge-low" : "badge status-badge-regression";
+    }
+    const pctEnergy = eCryptoBaseMj > 0 ? (eCryptoAdaptMj / eCryptoBaseMj) * 100 : 100;
+    if (cardCryptoEnergyPctBar) cardCryptoEnergyPctBar.textContent = `${pctEnergy.toFixed(1)}%`;
+    if (cardCryptoEnergyBarFill) {
+      cardCryptoEnergyBarFill.style.width = `${Math.min(100, Math.max(5, pctEnergy)).toFixed(1)}%`;
+      cardCryptoEnergyBarFill.style.background = pctEnergy <= 100 ? "#10b981" : "#f43f5e";
+    }
+
+    // Sub-Panel C: Cryptographic Component Energy Breakdown Table
+    if (cryptoBreakdownTbody) {
+      const eAesBaseMj = (base.energy_aes_joules || base.energy_crypto_joules || 0) * 1000.0;
+      const eAesAdaptMj = (adapt.energy_aes_joules || 0) * 1000.0;
+      const deltaAes = eAesAdaptMj - eAesBaseMj;
+
+      const eShaBaseMj = (base.energy_sha_joules || 0) * 1000.0;
+      const eShaAdaptMj = (adapt.energy_sha_joules || 0) * 1000.0;
+      const deltaSha = eShaAdaptMj - eShaBaseMj;
+
+      const eXorBaseMj = (base.energy_xor_joules || 0) * 1000.0;
+      const eXorAdaptMj = (adapt.energy_xor_joules || 0) * 1000.0;
+      const deltaXor = eXorAdaptMj - eXorBaseMj;
+
+      const eHmacBaseMj = (base.energy_hmac_joules || 0) * 1000.0;
+      const eHmacAdaptMj = (adapt.energy_hmac_joules || 0) * 1000.0;
+      const deltaHmac = eHmacAdaptMj - eHmacBaseMj;
+
+      const deltaCryptoTotalPct = compCryptoEnergy.percentage_change;
+
+      cryptoBreakdownTbody.innerHTML = `
+        <tr>
+          <td>AES-256-GCM Engine</td>
+          <td>${eAesBaseMj.toFixed(3)} mJ</td>
+          <td>${eAesAdaptMj.toFixed(3)} mJ</td>
+          <td style="color:${deltaAes <= 0 ? 'var(--status-success)' : 'var(--status-danger)'};">${deltaAes <= 0 ? '' : '+'}${deltaAes.toFixed(3)} mJ</td>
+        </tr>
+        <tr>
+          <td>SHA-256 Keystream</td>
+          <td>${eShaBaseMj.toFixed(3)} mJ</td>
+          <td>${eShaAdaptMj.toFixed(3)} mJ</td>
+          <td style="color:${deltaSha <= 0 ? 'var(--status-success)' : 'var(--status-warning)'};">${deltaSha <= 0 ? '' : '+'}${deltaSha.toFixed(3)} mJ</td>
+        </tr>
+        <tr>
+          <td>Bitwise XOR Loop</td>
+          <td>${eXorBaseMj.toFixed(3)} mJ</td>
+          <td>${eXorAdaptMj.toFixed(3)} mJ</td>
+          <td style="color:${deltaXor <= 0 ? 'var(--status-success)' : 'var(--status-warning)'};">${deltaXor <= 0 ? '' : '+'}${deltaXor.toFixed(3)} mJ</td>
+        </tr>
+        <tr>
+          <td>HMAC-SHA256 Auth Tag</td>
+          <td>${eHmacBaseMj.toFixed(3)} mJ</td>
+          <td>${eHmacAdaptMj.toFixed(3)} mJ</td>
+          <td style="color:${deltaHmac <= 0 ? 'var(--status-success)' : 'var(--status-warning)'};">${deltaHmac <= 0 ? '' : '+'}${deltaHmac.toFixed(3)} mJ</td>
+        </tr>
+        <tr style="font-weight:700;border-top:1px solid var(--border-subtle);">
+          <td>Subtotal Crypto Energy</td>
+          <td>${eCryptoBaseMj.toFixed(3)} mJ</td>
+          <td>${eCryptoAdaptMj.toFixed(3)} mJ</td>
+          <td style="color:${deltaCryptoTotalPct <= 0 ? 'var(--status-success)' : 'var(--status-danger)'};">${deltaCryptoTotalPct > 0 ? '+' : ''}${deltaCryptoTotalPct.toFixed(2)}%</td>
+        </tr>
+      `;
+    }
+
+    // Sub-Panel D: Whole-Batch Non-Overlapping Energy Accounting Table
+    if (batchBreakdownTbody) {
+      const eProcBaseMj = (base.energy_proc_joules || 0) * 1000.0;
+      const eProcAdaptMj = (adapt.energy_proc_joules || 0) * 1000.0;
+      const deltaProc = eProcAdaptMj - eProcBaseMj;
+
+      const eCryptoBaseMj = (base.energy_crypto_joules || 0) * 1000.0;
+      const eCryptoAdaptMj = (adapt.energy_crypto_joules || 0) * 1000.0;
+      const deltaCrypto = eCryptoAdaptMj - eCryptoBaseMj;
+
+      const eTxBaseMj = (base.energy_tx_joules || 0) * 1000.0;
+      const eTxAdaptMj = (adapt.energy_tx_joules || 0) * 1000.0;
+      const deltaTx = eTxAdaptMj - eTxBaseMj;
+
+      const eIdleBaseMj = (base.energy_idle_joules || 0) * 1000.0;
+      const eIdleAdaptMj = (adapt.energy_idle_joules || 0) * 1000.0;
+      const deltaIdle = eIdleAdaptMj - eIdleBaseMj;
+
+      const eTotalBaseMj = (base.total_energy_joules || 0) * 1000.0;
+      const eTotalAdaptMj = (adapt.total_energy_joules || 0) * 1000.0;
+      const deltaTotalPct = compEnergy.percentage_change;
+
+      batchBreakdownTbody.innerHTML = `
+        <tr>
+          <td>Shared Processing</td>
+          <td>${eProcBaseMj.toFixed(3)} mJ</td>
+          <td>${eProcAdaptMj.toFixed(3)} mJ</td>
+          <td style="color:${deltaProc === 0 ? 'var(--text-secondary)' : (deltaProc < 0 ? 'var(--status-success)' : 'var(--status-danger)')};">${deltaProc > 0 ? '+' : ''}${deltaProc.toFixed(3)} mJ</td>
+        </tr>
+        <tr>
+          <td>Cryptographic Ops</td>
+          <td>${eCryptoBaseMj.toFixed(3)} mJ</td>
+          <td>${eCryptoAdaptMj.toFixed(3)} mJ</td>
+          <td style="color:${deltaCrypto <= 0 ? 'var(--status-success)' : 'var(--status-danger)'};">${deltaCrypto > 0 ? '+' : ''}${deltaCrypto.toFixed(3)} mJ</td>
+        </tr>
+        <tr>
+          <td>Radio Transmission</td>
+          <td>${eTxBaseMj.toFixed(3)} mJ</td>
+          <td>${eTxAdaptMj.toFixed(3)} mJ</td>
+          <td style="color:${deltaTx === 0 ? 'var(--text-secondary)' : (deltaTx < 0 ? 'var(--status-success)' : 'var(--status-danger)')};">${deltaTx > 0 ? '+' : ''}${deltaTx.toFixed(3)} mJ</td>
+        </tr>
+        <tr>
+          <td>Idle / Sleep Interval</td>
+          <td>${eIdleBaseMj.toFixed(3)} mJ</td>
+          <td>${eIdleAdaptMj.toFixed(3)} mJ</td>
+          <td style="color:${deltaIdle <= 0 ? 'var(--status-success)' : 'var(--status-danger)'};">${deltaIdle > 0 ? '+' : ''}${deltaIdle.toFixed(3)} mJ</td>
+        </tr>
+        <tr style="font-weight:700;border-top:1px solid var(--border-subtle);">
+          <td>Total Batch Energy</td>
+          <td>${eTotalBaseMj.toFixed(3)} mJ</td>
+          <td>${eTotalAdaptMj.toFixed(3)} mJ</td>
+          <td style="color:${deltaTotalPct <= 0 ? 'var(--status-success)' : 'var(--status-danger)'};">${deltaTotalPct > 0 ? '+' : ''}${deltaTotalPct.toFixed(2)}%</td>
+        </tr>
+      `;
     }
   }
 
@@ -935,6 +1185,12 @@ document.addEventListener("DOMContentLoaded", () => {
         }
       }
     }
+
+    // Always update Cryptographic Computation Panel with the active/cached MCU data
+    const mcuDataToRender = (simState.scenario === "mcu" && data.baseline) ? data : simState.lastMcuData;
+    if (mcuDataToRender) {
+      renderCryptoComputationPanel(mcuDataToRender);
+    }
   }
 
   function updateScenarioUI(scenario) {
@@ -997,36 +1253,91 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
-  if (btnApplyMcuConfig) {
-    btnApplyMcuConfig.addEventListener("click", async () => {
-      const customCfg = {
-        supply_voltage_v: parseFloat(mcuVcc.value) || 3.3,
-        battery_nominal_mah: parseFloat(mcuBatteryMah.value) || 1200.0,
-        cpu_active_current_ma: parseFloat(mcuICpu.value) || 8.5,
-        aes_active_current_ma: parseFloat(mcuIAes.value) || 9.8,
-        sha256_active_current_ma: parseFloat(mcuISha.value) || 8.2,
-        xor_active_current_ma: parseFloat(mcuIXor.value) || 7.5,
-        hmac_active_current_ma: parseFloat(mcuIHmac.value) || 8.4,
-        radio_tx_current_ma: parseFloat(mcuITx.value) || 28.0,
-        t_aes_gcm_ms: parseFloat(mcuTAes.value) || 1.25,
-        t_sha256_keystream_ms: parseFloat(mcuTSha.value) || 0.25,
-        t_xor_stream_ms: parseFloat(mcuTXor.value) || 0.01,
-        t_hmac_sha256_ms: parseFloat(mcuTHmac.value) || 0.38,
-      };
+  // Phase 4: Sensitivity Tuning Controls & Automatic Two-Way Workload Balancing
+  function handleWorkloadSplitChange(source) {
+    let total = parseInt(mcuWorkloadTotal ? mcuWorkloadTotal.value : "100", 10);
+    if (isNaN(total) || total < 1) total = 100;
+    let high = parseInt(mcuWorkloadHigh ? mcuWorkloadHigh.value : "45", 10);
+    let routine = parseInt(mcuWorkloadRoutine ? mcuWorkloadRoutine.value : "55", 10);
 
-      try {
-        await fetch("/api/battery/mcu-config", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(customCfg),
-        });
-        showToast("MCU assumptions updated successfully.");
-        await fetchMcuScenarioData();
-        resetBatterySim();
-      } catch (err) {
-        showToast("Failed to update MCU parameters: " + err.message, "danger");
+    if (source === "high") {
+      high = Math.max(0, Math.min(total, isNaN(high) ? 0 : high));
+      routine = total - high;
+      if (mcuWorkloadHigh) mcuWorkloadHigh.value = high;
+      if (mcuWorkloadRoutine) mcuWorkloadRoutine.value = routine;
+    } else if (source === "routine") {
+      routine = Math.max(0, Math.min(total, isNaN(routine) ? 0 : routine));
+      high = total - routine;
+      if (mcuWorkloadHigh) mcuWorkloadHigh.value = high;
+      if (mcuWorkloadRoutine) mcuWorkloadRoutine.value = routine;
+    } else if (source === "total") {
+      if (isNaN(high)) high = Math.round(total * 0.45);
+      high = Math.max(0, Math.min(total, high));
+      routine = total - high;
+      if (mcuWorkloadHigh) mcuWorkloadHigh.value = high;
+      if (mcuWorkloadRoutine) mcuWorkloadRoutine.value = routine;
+    }
+
+    if (mcuWorkloadBalanceStatus) {
+      if (high + routine === total) {
+        mcuWorkloadBalanceStatus.textContent = `Balanced: ${high} High + ${routine} Routine = ${total} Total`;
+        mcuWorkloadBalanceStatus.className = "badge badge-aes";
+      } else {
+        mcuWorkloadBalanceStatus.textContent = `Unbalanced: High (${high}) + Routine (${routine}) ≠ Total (${total})`;
+        mcuWorkloadBalanceStatus.className = "badge status-badge-regression";
       }
-    });
+    }
+
+    fetchMcuScenarioData(total, high, routine);
+  }
+
+  if (mcuWorkloadTotal) {
+    mcuWorkloadTotal.addEventListener("input", () => handleWorkloadSplitChange("total"));
+  }
+  if (mcuWorkloadHigh) {
+    mcuWorkloadHigh.addEventListener("input", () => handleWorkloadSplitChange("high"));
+  }
+  if (mcuWorkloadRoutine) {
+    mcuWorkloadRoutine.addEventListener("input", () => handleWorkloadSplitChange("routine"));
+  }
+
+  async function applyCustomMcuConfig() {
+    const clockMhzVal = parseFloat(mcuClockMhz ? mcuClockMhz.value : "16.0") || 16.0;
+    const customCfg = {
+      supply_voltage_v: parseFloat(mcuVcc.value) || 3.3,
+      battery_nominal_mah: parseFloat(mcuBatteryMah.value) || 1200.0,
+      cpu_active_current_ma: parseFloat(mcuICpu.value) || 8.5,
+      aes_active_current_ma: parseFloat(mcuIAes.value) || 9.8,
+      sha256_active_current_ma: parseFloat(mcuISha.value) || 8.2,
+      xor_active_current_ma: parseFloat(mcuIXor.value) || 7.5,
+      hmac_active_current_ma: parseFloat(mcuIHmac.value) || 8.4,
+      radio_tx_current_ma: parseFloat(mcuITx.value) || 28.0,
+      t_aes_gcm_ms: parseFloat(mcuTAes.value) || 1.25,
+      t_sha256_keystream_ms: parseFloat(mcuTSha.value) || 0.25,
+      t_xor_stream_ms: parseFloat(mcuTXor.value) || 0.01,
+      t_hmac_sha256_ms: parseFloat(mcuTHmac.value) || 0.38,
+      mcu_clock_hz: clockMhzVal * 1_000_000.0,
+    };
+
+    try {
+      await fetch("/api/battery/mcu-config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(customCfg),
+      });
+      showToast("MCU assumptions updated successfully.");
+      const total = parseInt(mcuWorkloadTotal ? mcuWorkloadTotal.value : "100", 10) || 100;
+      const high = parseInt(mcuWorkloadHigh ? mcuWorkloadHigh.value : "45", 10) || 45;
+      const routine = parseInt(mcuWorkloadRoutine ? mcuWorkloadRoutine.value : "55", 10) || 55;
+      await fetchMcuScenarioData(total, high, routine);
+      resetBatterySim();
+    } catch (err) {
+      showToast("Failed to update MCU parameters: " + err.message, "danger");
+    }
+  }
+
+  if (btnApplyMcuConfig) {
+    btnApplyMcuConfig.addEventListener("click", applyCustomMcuConfig);
   }
 
   if (btnResetMcuDefaults) {
@@ -1043,6 +1354,14 @@ document.addEventListener("DOMContentLoaded", () => {
       if (mcuTSha) mcuTSha.value = "0.25";
       if (mcuTXor) mcuTXor.value = "0.01";
       if (mcuTHmac) mcuTHmac.value = "0.38";
+      if (mcuClockMhz) mcuClockMhz.value = "16.0";
+      if (mcuWorkloadTotal) mcuWorkloadTotal.value = "100";
+      if (mcuWorkloadHigh) mcuWorkloadHigh.value = "45";
+      if (mcuWorkloadRoutine) mcuWorkloadRoutine.value = "55";
+      if (mcuWorkloadBalanceStatus) {
+        mcuWorkloadBalanceStatus.textContent = "Balanced: 45 High + 55 Routine = 100 Total";
+        mcuWorkloadBalanceStatus.className = "badge badge-aes";
+      }
 
       const defaultCfg = {
         supply_voltage_v: 3.3,
@@ -1057,6 +1376,7 @@ document.addEventListener("DOMContentLoaded", () => {
         t_sha256_keystream_ms: 0.25,
         t_xor_stream_ms: 0.01,
         t_hmac_sha256_ms: 0.38,
+        mcu_clock_hz: 16_000_000.0,
       };
 
       try {
@@ -1066,7 +1386,7 @@ document.addEventListener("DOMContentLoaded", () => {
           body: JSON.stringify(defaultCfg),
         });
         showToast("Reset MCU defaults applied.");
-        await fetchMcuScenarioData();
+        await fetchMcuScenarioData(100, 45, 55);
         resetBatterySim();
       } catch (err) {
         showToast("Failed to reset defaults: " + err.message, "danger");
@@ -1082,6 +1402,7 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
+  // Phase 1: Calibrated Visual Scale Formula & Separation of Demonstration vs Modelled Physical State
   async function runBatterySimDemo() {
     resetBatterySim();
     btnBatteryStartDemo.disabled = true;
@@ -1110,7 +1431,10 @@ document.addEventListener("DOMContentLoaded", () => {
       vcc = 3.3;
     } else {
       // Scenario B: Constrained MCU Simulated
-      const mcuData = await fetchMcuScenarioData();
+      const total = parseInt(mcuWorkloadTotal ? mcuWorkloadTotal.value : "100", 10) || 100;
+      const high = parseInt(mcuWorkloadHigh ? mcuWorkloadHigh.value : "45", 10) || 45;
+      const routine = parseInt(mcuWorkloadRoutine ? mcuWorkloadRoutine.value : "55", 10) || 55;
+      const mcuData = await fetchMcuScenarioData(total, high, routine);
       if (!mcuData) {
         showToast("Unable to load MCU scenario model", "danger");
         btnBatteryStartDemo.disabled = false;
@@ -1129,10 +1453,27 @@ document.addEventListener("DOMContentLoaded", () => {
     const totalCapacityJoules = nominalMah * vcc * 3.6;
 
     // Visual Presentation Scale:
-    // Controls animation drop rate only, leaving underlying Joules and mAh exact!
-    const scaleFactor = simState.scale * 6000;
-    const baseDrop = Math.min(85.0, (baseTotalJ / totalCapacityJoules) * 100.0 * scaleFactor);
-    const adaptDrop = Math.min(85.0, (adaptTotalJ / totalCapacityJoules) * 100.0 * scaleFactor);
+    // Ensures baseline discharges visibly (~40% at scale 50, ~60% at scale 80, ~15% at scale 20)
+    // while adaptive visual drop is strictly scaled by (adaptTotalJ / baseTotalJ)
+    let baseDrop = 0.0;
+    let adaptDrop = 0.0;
+
+    if (simState.scale === 1) {
+      baseDrop = (baseTotalJ / totalCapacityJoules) * 100.0;
+      adaptDrop = (adaptTotalJ / totalCapacityJoules) * 100.0;
+    } else {
+      let targetBaseDrain = 40.0;
+      if (simState.scale === 80) targetBaseDrain = 60.0;
+      else if (simState.scale === 20) targetBaseDrain = 15.0;
+      else targetBaseDrain = 40.0; // scale 50: Noticeable 10-Second Demo (~40% Visual Drain, Recommended)
+
+      baseDrop = targetBaseDrain;
+      // Proportional adaptive drop:
+      adaptDrop = baseTotalJ > 0 ? baseDrop * (adaptTotalJ / baseTotalJ) : baseDrop;
+    }
+
+    baseDrop = Math.min(90.0, Math.max(0.5, baseDrop));
+    adaptDrop = Math.min(90.0, Math.max(0.5, adaptDrop));
 
     const targetBasePct = Math.max(5.0, 100.0 - baseDrop);
     const targetAdaptPct = Math.max(5.0, 100.0 - adaptDrop);
@@ -1161,12 +1502,13 @@ document.addEventListener("DOMContentLoaded", () => {
       simState.progress = progress;
       const fraction = progress / STEPS;
 
+      // Accelerated visual presentation meter:
       const curBasePct = 100.0 - (100.0 - targetBasePct) * fraction;
       const curAdaptPct = 100.0 - (100.0 - targetAdaptPct) * fraction;
+
+      // True physical energy and charge consumption (independent of visual acceleration):
       const curBaseJ = baseTotalJ * fraction;
       const curAdaptJ = adaptTotalJ * fraction;
-      // Underlying charge consumed in mAh strictly derived from Joules / (V * 3.6),
-      // completely independent of visual animation scaling:
       const curBaseMah = Math.max(0.0, nominalMah - (curBaseJ / (vcc * 3.6)));
       const curAdaptMah = Math.max(0.0, nominalMah - (curAdaptJ / (vcc * 3.6)));
 

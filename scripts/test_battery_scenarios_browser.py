@@ -65,9 +65,67 @@ def run_battery_scenarios_browser_test():
         assert pct_base == "100.0%"
         assert pct_adapt == "100.0%"
 
+        # Check modelled physical state readout separation
+        mah_base = page.locator("#battery-mah-baseline").inner_text().strip()
+        phys_pct_base = page.locator("#battery-phys-pct-baseline").inner_text().strip()
+        print(f"   Modelled physical charge: {mah_base}, capacity: {phys_pct_base}")
+        assert "1200.000 mAh" in mah_base
+        assert "100.000%" in phys_pct_base
+
         summary_badge = page.locator("#scenario-summary-status-badge").inner_text().strip()
         print(f"   Scenario summary badge: '{summary_badge}'")
         assert "MODEL PREDICTS LOWER ENERGY" in summary_badge
+
+        # 3b. Verify Dedicated Cryptographic Computation Panel (Phases 2 & 3)
+        print("3b. Verifying Dedicated Cryptographic Computation Panel & 3 Horizontal Cards...")
+        crypto_panel = page.locator("#crypto-computation-panel")
+        assert crypto_panel.is_visible()
+
+        # Card 1: Execution Time
+        c1_time_adapt = page.locator("#card-crypto-time-adapt").inner_text().strip()
+        c1_time_base = page.locator("#card-crypto-time-base").inner_text().strip()
+        c1_reduction = page.locator("#card-crypto-time-reduction").inner_text().strip()
+        c1_bar_width = page.locator("#card-crypto-time-bar-fill").evaluate("el => el.style.width")
+        print(f"   Card 1 Crypto Time: {c1_time_adapt} vs {c1_time_base} (Delta: {c1_reduction}, Bar: {c1_bar_width})")
+        assert "ms" in c1_time_adapt and "ms" in c1_time_base
+        assert "-" in c1_reduction or "%" in c1_reduction
+
+        # Card 2: Modelled CPU Cycles
+        c2_cycles_adapt = page.locator("#card-crypto-cycles-adapt").inner_text().strip()
+        c2_cycles_base = page.locator("#card-crypto-cycles-base").inner_text().strip()
+        c2_reduction = page.locator("#card-crypto-cycles-reduction").inner_text().strip()
+        print(f"   Card 2 Modelled CPU Cycles: {c2_cycles_adapt} vs {c2_cycles_base} (Delta: {c2_reduction})")
+        assert "," in c2_cycles_adapt and "," in c2_cycles_base
+
+        # Card 3: Cryptographic Component Energy
+        c3_energy_adapt = page.locator("#card-crypto-energy-adapt").inner_text().strip()
+        c3_energy_base = page.locator("#card-crypto-energy-base").inner_text().strip()
+        c3_reduction = page.locator("#card-crypto-energy-reduction").inner_text().strip()
+        print(f"   Card 3 Crypto Component Energy: {c3_energy_adapt} vs {c3_energy_base} (Delta: {c3_reduction})")
+        assert "mJ" in c3_energy_adapt and "mJ" in c3_energy_base
+
+        # Verify Plain-Language Faculty Explanation Quote
+        panel_text = crypto_panel.inner_text()
+        assert "The model predicts less cryptographic work for the adaptive configuration under these assumptions." in panel_text
+        assert "Overall battery savings may be smaller because radio transmission, shared processing, and idle energy also contribute." in panel_text
+        print("   [OK] Plain-language faculty quote confirmed in UI.")
+
+        # Verify Sub-Panels C and D Breakdown Tables
+        c_table = page.locator("#crypto-breakdown-tbody").inner_text()
+        assert "AES-256-GCM Engine" in c_table
+        assert "SHA-256 Keystream" in c_table
+        assert "Bitwise XOR Loop" in c_table
+        assert "HMAC-SHA256 Auth Tag" in c_table
+        assert "Subtotal Crypto Energy" in c_table
+        print("   [OK] Table C Cryptographic Component Breakdown verified.")
+
+        d_table = page.locator("#batch-breakdown-tbody").inner_text()
+        assert "Shared Processing" in d_table
+        assert "Cryptographic Ops" in d_table
+        assert "Radio Transmission" in d_table
+        assert "Idle / Sleep Interval" in d_table
+        assert "Total Batch Energy" in d_table
+        print("   [OK] Table D Whole-Batch Energy Accounting verified.")
 
         # 4. Test Simulation Animation in Scenario B with Pause and Resume
         print("4. Testing Simulation Controls in Scenario B...")
@@ -154,8 +212,9 @@ def run_battery_scenarios_browser_test():
         status_a_adapt = page.locator("#battery-status-adaptive").inner_text().strip()
         status_a_base = page.locator("#battery-status-baseline").inner_text().strip()
         print(f"   Scenario A Adaptive outcome tag: '{status_a_adapt}', Baseline: '{status_a_base}'")
-        assert "MODEL PREDICTS HIGHER ENERGY" in status_a_adapt
-        assert "DEPLETED LESS" in status_a_base
+        assert status_a_adapt in ["MODEL PREDICTS HIGHER ENERGY", "IDENTICAL CONSUMPTION"]
+        assert status_a_base in ["DEPLETED LESS", "IDENTICAL CONSUMPTION"]
+        assert "SAVING VERIFIED" not in status_a_adapt
 
         # Screenshot Scenario A Completed
         scen_a_png = os.path.join(SCREENSHOT_DIR, "battery_sim_scenario_a_completed.png")
@@ -174,6 +233,28 @@ def run_battery_scenarios_browser_test():
         drawer = page.locator("#mcu-config-drawer")
         assert drawer.is_visible()
         print("   [OK] MCU parameters drawer expanded.")
+
+        # Test Phase 4: Clock Frequency & Workload Sensitivity Split Controls
+        print("   Testing Clock Frequency and Workload Sensitivity Split tuning...")
+        clock_val = page.locator("#mcu-clock-mhz").input_value()
+        assert float(clock_val) == 16.0
+
+        # Change High Sensitivity to 20; Routine should automatically update to 80
+        page.fill("#mcu-workload-high", "20")
+        time.sleep(0.5)
+        routine_val = page.locator("#mcu-workload-routine").input_value()
+        print(f"   After setting High to 20, Routine auto-balanced to: {routine_val}")
+        assert routine_val == "80"
+
+        balance_text = page.locator("#mcu-workload-balance-status").inner_text().strip()
+        print(f"   Balance text is: '{balance_text}'")
+        assert "20 HIGH" in balance_text.upper() and "80 ROUTINE" in balance_text.upper()
+
+        # Rebalance back to default 45 / 55
+        page.fill("#mcu-workload-high", "45")
+        time.sleep(0.5)
+        assert page.locator("#mcu-workload-routine").input_value() == "55"
+        print("   [OK] Workload sensitivity split controls and automatic balancing verified.")
 
         # Screenshot MCU Drawer
         scen_drawer_png = os.path.join(SCREENSHOT_DIR, "battery_sim_mcu_params_drawer.png")

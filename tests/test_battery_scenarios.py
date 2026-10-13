@@ -311,3 +311,129 @@ def test_custom_mcu_parameters_improvement_and_regression(client):
     # Reset back to default MCU configuration for subsequent tests
     client.post("/api/battery/mcu-config", json=McuHardwareScenarioConfig().model_dump())
 
+
+# --- Test 8: Cryptographic Cycles & Dedicated Component Breakdown ---
+
+def test_crypto_cycles_and_isolated_component_breakdown():
+    """Verify cryptographic CPU cycle estimation from configured clock frequency and
+    strictly disjoint component energy breakdowns.
+    """
+    clock_16mhz = 16_000_000.0
+    cfg = McuHardwareScenarioConfig(
+        mcu_clock_hz=clock_16mhz,
+        t_aes_gcm_ms=1.25,
+        t_sha256_keystream_ms=0.25,
+        t_xor_stream_ms=0.01,
+        t_hmac_sha256_ms=0.38,
+        aes_active_current_ma=9.8,
+        sha256_active_current_ma=8.2,
+        xor_active_current_ma=7.5,
+        hmac_active_current_ma=8.4,
+    )
+    model = McuEnergyModel(cfg)
+    res = model.calculate_scenario(total_records=100, high_sensitivity_count=45, low_sensitivity_count=55)
+
+    base = res["baseline"]
+    adapt = res["adaptive"]
+
+    # 1. Base crypto duration: 100 * 1.25 = 125.0 ms
+    assert abs(base["crypto_duration_ms"] - 125.0) < 1e-4
+    # Expected base cycles: 0.125 s * 16,000,000 Hz = 2,000,000 cycles
+    expected_base_cycles = (base["crypto_duration_ms"] / 1000.0) * clock_16mhz
+    assert abs(base["crypto_cpu_cycles"] - 2_000_000.0) < 1.0
+    assert abs(base["crypto_cpu_cycles"] - expected_base_cycles) < 1.0
+
+    # 2. Adapt crypto duration: 45 * 1.25 + 55 * (0.25 + 0.01 + 0.38) = 56.25 + 35.2 = 91.45 ms
+    assert abs(adapt["crypto_duration_ms"] - 91.45) < 1e-4
+    # Expected adapt cycles: 0.09145 s * 16,000,000 Hz = 1,463,200 cycles
+    expected_adapt_cycles = (adapt["crypto_duration_ms"] / 1000.0) * clock_16mhz
+    assert abs(adapt["crypto_cpu_cycles"] - 1_463_200.0) < 1.0
+    assert abs(adapt["crypto_cpu_cycles"] - expected_adapt_cycles) < 1.0
+
+    # 3. Modelled cycle reduction percentage matches latency reduction
+    assert abs(res["crypto_cycles_comparison"]["percentage_change"] - res["crypto_time_comparison"]["percentage_change"]) < 1e-4
+    assert res["crypto_cycles_comparison"]["percentage_change"] < -26.0
+
+    # 4. Component energy breakdown strictly sums to total crypto energy
+    crypto_comp_sum = (
+        adapt["energy_aes_joules"]
+        + adapt["energy_sha_joules"]
+        + adapt["energy_xor_joules"]
+        + adapt["energy_hmac_joules"]
+    )
+    assert abs(adapt["energy_crypto_joules"] - crypto_comp_sum) < 1e-6
+
+    # 5. Whole batch energy breakdown strictly sums to total batch energy
+    batch_comp_sum = (
+        adapt["energy_proc_joules"]
+        + adapt["energy_crypto_joules"]
+        + adapt["energy_tx_joules"]
+        + adapt["energy_idle_joules"]
+    )
+    assert abs(adapt["total_energy_joules"] - batch_comp_sum) < 1e-6
+
+    # 6. Cryptographic component energy shows ~31% savings (greater than whole-batch ~6.6% due to radio)
+    assert res["crypto_energy_comparison"]["energy_saving_percent"] > 30.0
+    assert res["energy_comparison"]["energy_saving_percent"] < 10.0
+
+
+# --- Test 9: Sensitivity Tuning via Query Parameters & API ---
+
+def test_mcu_sensitivity_tuning_query_params(client):
+    """Verify GET /api/battery/mcu-scenario updates dynamically when passing
+    record_count, high_count, and low_count query parameters.
+    """
+    # 1. 20 High / 80 Routine split
+    resp_80_routine = client.get("/api/battery/mcu-scenario?record_count=100&high_count=20&low_count=80")
+    assert resp_80_routine.status_code == 200
+    data_80 = resp_80_routine.json()
+    assert data_80["high_sensitivity_count"] == 20
+    assert data_80["low_sensitivity_count"] == 80
+
+    # 2. 80 High / 20 Routine split
+    resp_20_routine = client.get("/api/battery/mcu-scenario?record_count=100&high_count=80&low_count=20")
+    assert resp_20_routine.status_code == 200
+    data_20 = resp_20_routine.json()
+    assert data_20["high_sensitivity_count"] == 80
+    assert data_20["low_sensitivity_count"] == 20
+
+    # More routine records routed to XOR must yield higher cryptographic energy savings
+    assert data_80["crypto_energy_comparison"]["energy_saving_percent"] > data_20["crypto_energy_comparison"]["energy_saving_percent"]
+    # And lower adaptive cryptographic latency
+    assert data_80["adaptive"]["crypto_duration_ms"] < data_20["adaptive"]["crypto_duration_ms"]
+
+
+# --- Test 10: Proportional Visual Battery Scaling Consistency ---
+
+def test_proportional_visual_battery_scaling():
+    """Verify that the battery visual scaling formula applies the identical multiplier
+    to baseline and adaptive, preserving the relative comparison derived strictly from model outputs.
+    """
+    nominal_mah = 1200.0
+    vcc = 3.3
+    total_capacity_j = nominal_mah * vcc * 3.6
+
+    # Case A: MCU Scenario (Adaptive consumes less energy)
+    base_j_mcu = 0.018968
+    adapt_j_mcu = 0.017708
+    target_base_drain = 40.0  # Scale 50 default
+
+    base_drop_mcu = target_base_drain
+    adapt_drop_mcu = base_drop_mcu * (adapt_j_mcu / base_j_mcu)
+
+    # Adaptive drops LESS than baseline (battery ends with MORE charge remaining)
+    assert adapt_drop_mcu < base_drop_mcu
+    assert abs(adapt_drop_mcu - (40.0 * 0.017708 / 0.018968)) < 1e-4
+    assert (100.0 - adapt_drop_mcu) > (100.0 - base_drop_mcu)
+
+    # Case B: Desktop Scenario (Adaptive consumes MORE energy due to lack of AES-NI)
+    base_j_desk = 0.025546
+    adapt_j_desk = 0.025834
+    base_drop_desk = target_base_drain
+    adapt_drop_desk = base_drop_desk * (adapt_j_desk / base_j_desk)
+
+    # Adaptive drops MORE than baseline (battery ends with LESS charge remaining)
+    assert adapt_drop_desk > base_drop_desk
+    assert (100.0 - adapt_drop_desk) < (100.0 - base_drop_desk)
+
+

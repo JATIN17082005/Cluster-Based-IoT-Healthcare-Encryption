@@ -359,6 +359,10 @@ class McuEnergyModel:
         charge_consumed_adapt_mah = mean_current_adapt_ma * (duration_adapt_s / 3600.0)
         runtime_adapt_hours = usable_capacity_mah / max(0.001, mean_current_adapt_ma)
 
+        # Modelled cryptographic CPU cycles from configured clock frequency (Hz)
+        crypto_cycles_base = (t_crypto_base_ms / 1000.0) * cfg.mcu_clock_hz
+        crypto_cycles_adapt = (t_crypto_adapt_ms / 1000.0) * cfg.mcu_clock_hz
+
         # Comparative analytics using authoritative calculation functions
         comp_energy = compute_authoritative_comparison(
             baseline_val=total_energy_base_j,
@@ -373,6 +377,20 @@ class McuEnergyModel:
             metric_name="Simulated MCU Cryptographic Latency",
             lower_is_better=True,
             is_energy_metric=False,
+        )
+        comp_crypto_cycles = compute_authoritative_comparison(
+            baseline_val=crypto_cycles_base,
+            proposed_val=crypto_cycles_adapt,
+            metric_name="Modelled Cryptographic CPU Cycles",
+            lower_is_better=True,
+            is_energy_metric=False,
+        )
+        comp_crypto_energy = compute_authoritative_comparison(
+            baseline_val=e_crypto_base_j,
+            proposed_val=e_crypto_adapt_j,
+            metric_name="Cryptographic Component Energy",
+            lower_is_better=True,
+            is_energy_metric=True,
         )
 
         return {
@@ -393,9 +411,14 @@ class McuEnergyModel:
                 "total_energy_joules_display": round(total_energy_base_j, 8),
                 "energy_proc_joules": round(e_proc_base_j, 8),
                 "energy_crypto_joules": round(e_crypto_base_j, 8),
+                "energy_aes_joules": round(e_crypto_base_j, 8),
+                "energy_sha_joules": 0.0,
+                "energy_xor_joules": 0.0,
+                "energy_hmac_joules": 0.0,
                 "energy_tx_joules": round(e_tx_base_j, 8),
                 "energy_idle_joules": round(e_idle_base_j, 8),
                 "crypto_duration_ms": round(t_crypto_base_ms, 4),
+                "crypto_cpu_cycles": round(crypto_cycles_base, 0),
                 "shared_proc_duration_ms": round(t_proc_base_ms, 4),
                 "tx_duration_ms": round(t_tx_base_ms, 4),
                 "idle_duration_ms": round(t_idle_base_ms, 4),
@@ -417,6 +440,7 @@ class McuEnergyModel:
                 "energy_tx_joules": round(e_tx_adapt_j, 8),
                 "energy_idle_joules": round(e_idle_adapt_j, 8),
                 "crypto_duration_ms": round(t_crypto_adapt_ms, 4),
+                "crypto_cpu_cycles": round(crypto_cycles_adapt, 0),
                 "shared_proc_duration_ms": round(t_proc_adapt_ms, 4),
                 "tx_duration_ms": round(t_tx_adapt_ms, 4),
                 "idle_duration_ms": round(t_idle_adapt_ms, 4),
@@ -428,4 +452,6 @@ class McuEnergyModel:
             },
             "energy_comparison": comp_energy,
             "crypto_time_comparison": comp_crypto_time,
+            "crypto_cycles_comparison": comp_crypto_cycles,
+            "crypto_energy_comparison": comp_crypto_energy,
         }
