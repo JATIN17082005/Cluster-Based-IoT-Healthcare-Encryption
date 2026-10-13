@@ -23,7 +23,7 @@ document.addEventListener("DOMContentLoaded", () => {
     isSimulating: false,
     isPaused: false,
     timerId: null,
-    scale: 50, // Presentation scale
+    scale: 80, // Presentation scale (default high-contrast 80% visual drain)
     lastMcuData: null,
     progress: 0,
     stepsTotal: 30,
@@ -112,6 +112,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // Battery Simulation Controls & Meters
   const batteryScenarioSelect = document.getElementById("battery-scenario-select");
+  const mcuProfileContainer = document.getElementById("mcu-profile-container");
+  const mcuProfileSelect = document.getElementById("mcu-profile-select");
   const scenarioBadgeHeader = document.getElementById("scenario-badge-header");
   const scenarioPillTag = document.getElementById("scenario-pill-tag");
   const scenarioDisclaimerBanner = document.getElementById("scenario-disclaimer-banner");
@@ -157,6 +159,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const mcuTSha = document.getElementById("mcu-t-sha");
   const mcuTXor = document.getElementById("mcu-t-xor");
   const mcuTHmac = document.getElementById("mcu-t-hmac");
+  const mcuTTx = document.getElementById("mcu-t-tx");
 
   // Scenario Comparison Summary Elements
   const scenarioSummaryStatusBadge = document.getElementById("scenario-summary-status-badge");
@@ -208,8 +211,15 @@ document.addEventListener("DOMContentLoaded", () => {
   const cardCryptoEnergyPctBar = document.getElementById("card-crypto-energy-pct-bar");
   const cardCryptoEnergyBarFill = document.getElementById("card-crypto-energy-bar-fill");
 
+  const cardBatchEnergyReduction = document.getElementById("card-batch-energy-reduction");
+  const cardBatchEnergyAdapt = document.getElementById("card-batch-energy-adapt");
+  const cardBatchEnergyBase = document.getElementById("card-batch-energy-base");
+  const cardBatchEnergyPctBar = document.getElementById("card-batch-energy-pct-bar");
+  const cardBatchEnergyBarFill = document.getElementById("card-batch-energy-bar-fill");
+
   const cryptoBreakdownTbody = document.getElementById("crypto-breakdown-tbody");
   const batchBreakdownTbody = document.getElementById("batch-breakdown-tbody");
+  const radioSweepTbody = document.getElementById("radio-sweep-tbody");
 
   // Comparison Tab Elements
   const overallStatusBadge = document.getElementById("overall-status-badge");
@@ -863,17 +873,19 @@ document.addEventListener("DOMContentLoaded", () => {
     if (btnBatteryReplay) btnBatteryReplay.disabled = false;
   }
 
-  async function fetchMcuScenarioData(total, high, routine) {
+  async function fetchMcuScenarioData(total, high, routine, profileOverride) {
     try {
       let url = "/api/battery/mcu-scenario";
       const recTotal = total !== undefined ? total : (mcuWorkloadTotal ? parseInt(mcuWorkloadTotal.value, 10) : 100);
       const recHigh = high !== undefined ? high : (mcuWorkloadHigh ? parseInt(mcuWorkloadHigh.value, 10) : 45);
       const recRoutine = routine !== undefined ? routine : (mcuWorkloadRoutine ? parseInt(mcuWorkloadRoutine.value, 10) : 55);
+      const prof = profileOverride !== undefined ? profileOverride : (mcuProfileSelect ? mcuProfileSelect.value : "short_tx");
 
       const params = new URLSearchParams();
       if (!isNaN(recTotal)) params.set("record_count", recTotal);
       if (!isNaN(recHigh)) params.set("high_count", recHigh);
       if (!isNaN(recRoutine)) params.set("low_count", recRoutine);
+      if (prof) params.set("profile", prof);
       const qs = params.toString();
       if (qs) url += `?${qs}`;
 
@@ -966,6 +978,23 @@ document.addEventListener("DOMContentLoaded", () => {
     if (cardCryptoEnergyBarFill) {
       cardCryptoEnergyBarFill.style.width = `${Math.min(100, Math.max(5, pctEnergy)).toFixed(1)}%`;
       cardCryptoEnergyBarFill.style.background = pctEnergy <= 100 ? "#10b981" : "#f43f5e";
+    }
+
+    // Card 4: Total Batch Energy
+    const eBatchBaseMj = (base.total_energy_joules || 0) * 1000.0;
+    const eBatchAdaptMj = (adapt.total_energy_joules || 0) * 1000.0;
+    if (cardBatchEnergyAdapt) cardBatchEnergyAdapt.textContent = `${eBatchAdaptMj.toFixed(3)} mJ`;
+    if (cardBatchEnergyBase) cardBatchEnergyBase.textContent = `${eBatchBaseMj.toFixed(3)} mJ`;
+    if (cardBatchEnergyReduction) {
+      const pctChange = compEnergy.percentage_change;
+      cardBatchEnergyReduction.textContent = `${pctChange > 0 ? "+" : ""}${pctChange.toFixed(2)}%`;
+      cardBatchEnergyReduction.className = compEnergy.is_improvement ? "badge badge-low" : "badge status-badge-regression";
+    }
+    const pctBatchEnergy = eBatchBaseMj > 0 ? (eBatchAdaptMj / eBatchBaseMj) * 100 : 100;
+    if (cardBatchEnergyPctBar) cardBatchEnergyPctBar.textContent = `${pctBatchEnergy.toFixed(1)}%`;
+    if (cardBatchEnergyBarFill) {
+      cardBatchEnergyBarFill.style.width = `${Math.min(100, Math.max(5, pctBatchEnergy)).toFixed(1)}%`;
+      cardBatchEnergyBarFill.style.background = pctBatchEnergy <= 100 ? "#10b981" : "#f43f5e";
     }
 
     // Sub-Panel C: Cryptographic Component Energy Breakdown Table
@@ -1077,6 +1106,27 @@ document.addEventListener("DOMContentLoaded", () => {
         </tr>
       `;
     }
+
+    // Sub-Panel E: Radio Transmission Sensitivity Analysis across Intervals
+    if (radioSweepTbody && data.radio_sensitivity_sweep) {
+      const activeTxMs = (data.config && data.config.t_radio_tx_ms) ? data.config.t_radio_tx_ms : 0.5;
+      radioSweepTbody.innerHTML = data.radio_sensitivity_sweep.map((row) => {
+        const isCurrent = Math.abs(row.interval_ms - activeTxMs) < 0.01;
+        const highlightStyle = isCurrent ? 'style="background:rgba(14,165,233,0.12);font-weight:600;"' : '';
+        const badgeClass = row.is_improvement ? 'badge-low' : 'status-badge-regression';
+        const savingSign = row.energy_saving_percent > 0 ? '+' : '';
+        return `
+          <tr ${highlightStyle}>
+            <td><strong>${row.interval_ms.toFixed(2)} ms</strong> ${isCurrent ? '<span class="badge badge-aes" style="font-size:0.65rem;margin-left:0.3rem;">ACTIVE</span>' : ''}</td>
+            <td>${row.baseline_energy_mj.toFixed(3)} mJ</td>
+            <td>${row.adaptive_energy_mj.toFixed(3)} mJ</td>
+            <td>${row.tx_energy_mj.toFixed(3)} mJ</td>
+            <td style="color:${row.is_improvement ? 'var(--status-success)' : 'var(--status-danger)'};font-weight:700;">${savingSign}${row.energy_saving_percent.toFixed(2)}%</td>
+            <td><span class="badge ${badgeClass}" style="font-size:0.68rem;">${row.result_status}</span></td>
+          </tr>
+        `;
+      }).join('');
+    }
   }
 
   function renderScenarioSummary(data) {
@@ -1135,6 +1185,19 @@ document.addEventListener("DOMContentLoaded", () => {
           scenarioSummaryStatusBadge.textContent = "IDENTICAL CONSUMPTION (0.00%)";
           scenarioSummaryStatusBadge.className = "badge badge-aes";
         }
+      }
+
+      if (data.provenance_label && scenarioDisclaimerTitle) {
+        scenarioDisclaimerTitle.textContent = data.provenance_label;
+      }
+      if (data.provenance_disclaimer && scenarioDisclaimerBody) {
+        scenarioDisclaimerBody.textContent = data.provenance_disclaimer;
+      }
+      if (data.provenance_label && scenarioBadgeHeader) {
+        scenarioBadgeHeader.textContent = data.provenance_label;
+      }
+      if (scenarioPillTag) {
+        scenarioPillTag.textContent = (data.profile_id === "short_tx") ? "SHORT-TX MCU SCENARIO" : "SIMULATED TARGET-MCU SCENARIO";
       }
     } else {
       // Desktop Scenario Summary
@@ -1197,15 +1260,25 @@ document.addEventListener("DOMContentLoaded", () => {
     simState.scenario = scenario;
     const isMcu = (scenario === "mcu");
 
+    if (mcuProfileContainer) {
+      mcuProfileContainer.style.display = isMcu ? "inline-flex" : "none";
+    }
+
     if (isMcu) {
-      if (scenarioBadgeHeader) scenarioBadgeHeader.textContent = "SIMULATED TARGET-MCU SCENARIO — RESULTS DEPEND ON CONFIGURED ASSUMPTIONS";
+      const isShortTx = (mcuProfileSelect ? mcuProfileSelect.value === "short_tx" : true);
+      const provLabel = isShortTx
+        ? "COMPUTE-INTENSIVE / SHORT-TX MCU SCENARIO — CONFIGURABLE HYPOTHETICAL MODEL"
+        : "SIMULATED TARGET-MCU SCENARIO — RESULTS DEPEND ON CONFIGURED ASSUMPTIONS";
+      if (scenarioBadgeHeader) scenarioBadgeHeader.textContent = provLabel;
       if (scenarioPillTag) {
-        scenarioPillTag.textContent = "SIMULATED TARGET-MCU SCENARIO";
+        scenarioPillTag.textContent = isShortTx ? "SHORT-TX MCU SCENARIO" : "SIMULATED TARGET-MCU SCENARIO";
         scenarioPillTag.className = "badge badge-aes";
       }
-      if (scenarioDisclaimerTitle) scenarioDisclaimerTitle.textContent = "SIMULATED TARGET-MCU SCENARIO — RESULTS DEPEND ON CONFIGURED ASSUMPTIONS";
+      if (scenarioDisclaimerTitle) scenarioDisclaimerTitle.textContent = provLabel;
       if (scenarioDisclaimerBody) {
-        scenarioDisclaimerBody.textContent = "Evaluation platform: Simulated ARM Cortex-M0+ / 8-bit AVR edge microcontroller (16 MHz, 3.3V) without cryptographic hardware acceleration. Software AES-256-GCM takes ~20,000 cycles (~1.25 ms), while the lightweight XOR stream route takes ~10,000 cycles (~0.64 ms). This scenario is illustrative until validated against empirical target-board measurements.";
+        scenarioDisclaimerBody.textContent = isShortTx
+          ? "Configurable hypothetical model for high-throughput short airtime radios (e.g., BLE 2Mbps / packed telemetry @ 0.5 ms TX airtime). Valid only for workloads and radio settings that support 0.5 ms airtime. Does not represent measured hardware."
+          : "Evaluation platform: Simulated ARM Cortex-M0+ / 8-bit AVR edge microcontroller (16 MHz, 3.3V) without cryptographic hardware acceleration. Software AES-256-GCM takes ~20,000 cycles (~1.25 ms), while the lightweight XOR stream route takes ~10,000 cycles (~0.64 ms). Standard IoT radio scenario (1.5 ms TX airtime). This scenario is illustrative until validated against empirical target-board measurements.";
       }
       if (scenarioDisclaimerBanner) {
         scenarioDisclaimerBanner.style.background = "rgba(14,165,233,0.08)";
@@ -1244,6 +1317,17 @@ document.addEventListener("DOMContentLoaded", () => {
   if (batteryScenarioSelect) {
     batteryScenarioSelect.addEventListener("change", (e) => {
       updateScenarioUI(e.target.value);
+    });
+  }
+
+  if (mcuProfileSelect) {
+    mcuProfileSelect.addEventListener("change", async (e) => {
+      const prof = e.target.value;
+      if (mcuTTx) {
+        mcuTTx.value = (prof === "short_tx") ? "0.5" : "1.5";
+      }
+      await fetchMcuScenarioData(undefined, undefined, undefined, prof);
+      resetBatterySim();
     });
   }
 
@@ -1303,6 +1387,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   async function applyCustomMcuConfig() {
     const clockMhzVal = parseFloat(mcuClockMhz ? mcuClockMhz.value : "16.0") || 16.0;
+    const txMsVal = parseFloat(mcuTTx ? mcuTTx.value : "0.5") || 0.5;
     const customCfg = {
       supply_voltage_v: parseFloat(mcuVcc.value) || 3.3,
       battery_nominal_mah: parseFloat(mcuBatteryMah.value) || 1200.0,
@@ -1316,6 +1401,7 @@ document.addEventListener("DOMContentLoaded", () => {
       t_sha256_keystream_ms: parseFloat(mcuTSha.value) || 0.25,
       t_xor_stream_ms: parseFloat(mcuTXor.value) || 0.01,
       t_hmac_sha256_ms: parseFloat(mcuTHmac.value) || 0.38,
+      t_radio_tx_ms: txMsVal,
       mcu_clock_hz: clockMhzVal * 1_000_000.0,
     };
 
@@ -1325,11 +1411,14 @@ document.addEventListener("DOMContentLoaded", () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(customCfg),
       });
+      if (mcuProfileSelect) {
+        mcuProfileSelect.value = txMsVal <= 0.6 ? "short_tx" : "radio_heavy";
+      }
       showToast("MCU assumptions updated successfully.");
       const total = parseInt(mcuWorkloadTotal ? mcuWorkloadTotal.value : "100", 10) || 100;
       const high = parseInt(mcuWorkloadHigh ? mcuWorkloadHigh.value : "45", 10) || 45;
       const routine = parseInt(mcuWorkloadRoutine ? mcuWorkloadRoutine.value : "55", 10) || 55;
-      await fetchMcuScenarioData(total, high, routine);
+      await fetchMcuScenarioData(total, high, routine, mcuProfileSelect ? mcuProfileSelect.value : undefined);
       resetBatterySim();
     } catch (err) {
       showToast("Failed to update MCU parameters: " + err.message, "danger");
@@ -1342,6 +1431,9 @@ document.addEventListener("DOMContentLoaded", () => {
 
   if (btnResetMcuDefaults) {
     btnResetMcuDefaults.addEventListener("click", async () => {
+      const isShortTx = (mcuProfileSelect ? mcuProfileSelect.value === "short_tx" : true);
+      const defaultTxMs = isShortTx ? 0.5 : 1.5;
+
       if (mcuVcc) mcuVcc.value = "3.3";
       if (mcuBatteryMah) mcuBatteryMah.value = "1200.0";
       if (mcuICpu) mcuICpu.value = "8.5";
@@ -1354,6 +1446,7 @@ document.addEventListener("DOMContentLoaded", () => {
       if (mcuTSha) mcuTSha.value = "0.25";
       if (mcuTXor) mcuTXor.value = "0.01";
       if (mcuTHmac) mcuTHmac.value = "0.38";
+      if (mcuTTx) mcuTTx.value = defaultTxMs.toString();
       if (mcuClockMhz) mcuClockMhz.value = "16.0";
       if (mcuWorkloadTotal) mcuWorkloadTotal.value = "100";
       if (mcuWorkloadHigh) mcuWorkloadHigh.value = "45";
@@ -1376,6 +1469,7 @@ document.addEventListener("DOMContentLoaded", () => {
         t_sha256_keystream_ms: 0.25,
         t_xor_stream_ms: 0.01,
         t_hmac_sha256_ms: 0.38,
+        t_radio_tx_ms: defaultTxMs,
         mcu_clock_hz: 16_000_000.0,
       };
 
@@ -1386,7 +1480,7 @@ document.addEventListener("DOMContentLoaded", () => {
           body: JSON.stringify(defaultCfg),
         });
         showToast("Reset MCU defaults applied.");
-        await fetchMcuScenarioData(100, 45, 55);
+        await fetchMcuScenarioData(100, 45, 55, mcuProfileSelect ? mcuProfileSelect.value : undefined);
         resetBatterySim();
       } catch (err) {
         showToast("Failed to reset defaults: " + err.message, "danger");
@@ -1453,7 +1547,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const totalCapacityJoules = nominalMah * vcc * 3.6;
 
     // Visual Presentation Scale:
-    // Ensures baseline discharges visibly (~40% at scale 50, ~60% at scale 80, ~15% at scale 20)
+    // Ensures baseline discharges visibly (~80% at scale 80, ~40% at scale 50, ~15% at scale 20)
     // while adaptive visual drop is strictly scaled by (adaptTotalJ / baseTotalJ)
     let baseDrop = 0.0;
     let adaptDrop = 0.0;
@@ -1462,10 +1556,11 @@ document.addEventListener("DOMContentLoaded", () => {
       baseDrop = (baseTotalJ / totalCapacityJoules) * 100.0;
       adaptDrop = (adaptTotalJ / totalCapacityJoules) * 100.0;
     } else {
-      let targetBaseDrain = 40.0;
-      if (simState.scale === 80) targetBaseDrain = 60.0;
+      let targetBaseDrain = 80.0;
+      if (simState.scale === 80) targetBaseDrain = 80.0;
+      else if (simState.scale === 50) targetBaseDrain = 40.0;
       else if (simState.scale === 20) targetBaseDrain = 15.0;
-      else targetBaseDrain = 40.0; // scale 50: Noticeable 10-Second Demo (~40% Visual Drain, Recommended)
+      else targetBaseDrain = 80.0; // scale 80: High-Contrast 10-Second Demo (~80% Visual Drain, Faculty Review)
 
       baseDrop = targetBaseDrain;
       // Proportional adaptive drop:

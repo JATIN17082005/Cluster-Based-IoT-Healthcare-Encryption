@@ -430,6 +430,13 @@
               <option value="desktop">A. Current Desktop Benchmark (x86-64 OpenSSL + AES-NI)</option>
               <option value="mcu" selected>B. Constrained IoT Microcontroller &mdash; Simulated (No AES-NI)</option>
             </select>
+            <div id="mcu-profile-container" style="display:inline-flex;align-items:center;gap:0.45rem;">
+              <label for="mcu-profile-select" style="font-size:0.82rem;color:var(--text-secondary);font-weight:600;">MCU Profile:</label>
+              <select id="mcu-profile-select" style="background:var(--bg-surface-1);border:1px solid var(--brand-cyan);color:#fff;border-radius:var(--radius-sm);padding:0.35rem 0.65rem;font-size:0.82rem;font-weight:600;cursor:pointer;">
+                <option value="short_tx" selected>Compute-Intensive / Short-TX (0.5 ms Radio TX)</option>
+                <option value="radio_heavy">Radio-Heavy MCU Model (1.5 ms Radio TX)</option>
+              </select>
+            </div>
             <button id="btn-toggle-mcu-params" class="btn btn-outline" style="font-size:0.75rem;padding:0.3rem 0.65rem;">
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
               Inspect/Configure MCU Parameters
@@ -510,6 +517,10 @@
             <div>
               <label style="color:var(--text-muted);display:block;margin-bottom:0.2rem;">HMAC-SHA256 Time (ms):</label>
               <input type="number" id="mcu-t-hmac" step="0.05" value="0.38" style="width:100%;padding:0.3rem;background:var(--bg-surface-2);color:#fff;border:1px solid var(--border-subtle);border-radius:4px;">
+            </div>
+            <div>
+              <label style="color:var(--text-muted);display:block;margin-bottom:0.2rem;">Radio TX Active Time (ms):</label>
+              <input type="number" id="mcu-t-tx" step="0.05" value="0.5" style="width:100%;padding:0.3rem;background:var(--bg-surface-2);color:#fff;border:1px solid var(--border-subtle);border-radius:4px;">
             </div>
             <!-- Workload & Sensitivity Interactive Tuner -->
             <div style="grid-column:1 / -1;background:var(--bg-surface-2);border:1px solid rgba(255,255,255,0.08);border-radius:var(--radius-sm);padding:0.75rem 1rem;margin-top:0.4rem;">
@@ -649,8 +660,8 @@
           <div style="display:flex;align-items:center;gap:0.75rem;">
             <label for="sim-scale-select" style="font-size:0.78rem;color:var(--text-secondary);">Visual Presentation Scale:</label>
             <select id="sim-scale-select" style="background:var(--bg-surface-1);border:1px solid var(--border-subtle);color:#fff;border-radius:var(--radius-sm);padding:0.3rem 0.5rem;font-size:0.8rem;">
-              <option value="50" selected>Noticeable 10-Second Demo (~40% Visual Drain, Recommended)</option>
-              <option value="80">Fast Presentation Drain (~60% Visual Drain)</option>
+              <option value="80" selected>High-Contrast 10-Second Demo (~80% Visual Drain, Faculty Review)</option>
+              <option value="50">Noticeable 10-Second Demo (~40% Visual Drain)</option>
               <option value="20">Subtle Drain (~15% Visual Drain)</option>
               <option value="1">1x Physics Scale (Unaccelerated Micro-Discharge)</option>
             </select>
@@ -716,8 +727,8 @@
             <span id="crypto-computation-badge" class="badge badge-low" style="font-size:0.8rem;padding:0.35rem 0.75rem;">CRYPTO WORK REDUCTION: -30.9%</span>
           </div>
 
-          <!-- Phase 3: Three Prominent Horizontal Comparison Cards Normalized to Baseline 100% -->
-          <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(280px, 1fr));gap:1rem;margin-bottom:1.25rem;">
+          <!-- Phase 3: Four Prominent Horizontal Comparison Cards Normalized to Baseline 100% -->
+          <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(240px, 1fr));gap:1rem;margin-bottom:1.25rem;">
             <!-- Card 1: Estimated Cryptographic Execution Time -->
             <div style="background:var(--bg-surface-1);border:1px solid var(--border-subtle);border-radius:var(--radius-sm);padding:1rem;">
               <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:0.4rem;">
@@ -819,6 +830,41 @@
                 *Exclusive of radio transmission and shared processing overhead.
               </div>
             </div>
+
+            <!-- Card 4: Total Batch Energy -->
+            <div style="background:var(--bg-surface-1);border:1px solid var(--border-subtle);border-radius:var(--radius-sm);padding:1rem;">
+              <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:0.4rem;">
+                <span style="font-size:0.8rem;font-weight:600;color:var(--text-secondary);">4. Total Batch Energy</span>
+                <span id="card-batch-energy-reduction" class="badge badge-low" style="font-size:0.72rem;">-12.91%</span>
+              </div>
+              <div style="font-size:1.15rem;font-weight:700;color:#fff;margin-bottom:0.6rem;">
+                <span id="card-batch-energy-adapt" style="color:var(--brand-cyan);">8.472 mJ</span>
+                <span style="font-size:0.75rem;color:var(--text-muted);font-weight:400;"> vs Base: </span>
+                <span id="card-batch-energy-base" style="font-size:0.82rem;color:var(--text-secondary);font-weight:600;">9.733 mJ</span>
+              </div>
+              <!-- Normalized Bar (Baseline = 100%) -->
+              <div style="font-size:0.72rem;margin-bottom:0.4rem;">
+                <div style="display:flex;justify-content:space-between;color:var(--text-muted);margin-bottom:0.2rem;">
+                  <span>Baseline (100% AES)</span>
+                  <span>100.0%</span>
+                </div>
+                <div style="width:100%;height:8px;background:var(--bg-surface-2);border-radius:4px;overflow:hidden;">
+                  <div style="width:100%;height:100%;background:#38bdf8;border-radius:4px;"></div>
+                </div>
+              </div>
+              <div style="font-size:0.72rem;">
+                <div style="display:flex;justify-content:space-between;color:var(--text-muted);margin-bottom:0.2rem;">
+                  <span>Adaptive (AES + XOR)</span>
+                  <span id="card-batch-energy-pct-bar" style="color:var(--brand-cyan);font-weight:600;">87.0%</span>
+                </div>
+                <div style="width:100%;height:8px;background:var(--bg-surface-2);border-radius:4px;overflow:hidden;">
+                  <div id="card-batch-energy-bar-fill" style="width:87.0%;height:100%;background:#10b981;border-radius:4px;transition:width 0.4s ease;"></div>
+                </div>
+              </div>
+              <div style="font-size:0.68rem;color:var(--text-muted);margin-top:0.4rem;">
+                *Whole batch: crypto ops + shared processing + radio TX + idle interval.
+              </div>
+            </div>
           </div>
 
           <!-- Plain Language Faculty Explanation Banner (Required in Phase 3) -->
@@ -888,6 +934,39 @@
               <div style="font-size:0.7rem;color:var(--text-muted);margin-top:0.4rem;">
                 *All disjoint interval components strictly sum to reported total batch energy within floating-point tolerance.
               </div>
+            </div>
+          </div>
+
+          <!-- Sub-Panel E: Radio Transmission Sensitivity Analysis across Intervals -->
+          <div style="margin-top:1.25rem;background:var(--bg-surface-1);border:1px solid var(--border-subtle);border-radius:var(--radius-sm);padding:1rem;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.65rem;flex-wrap:wrap;gap:0.5rem;">
+              <h5 style="font-size:0.85rem;font-weight:600;color:#fff;margin:0;">
+                E. Radio Transmission Sensitivity Analysis across Intervals (0.50 ms &ndash; 1.50 ms)
+              </h5>
+              <span class="badge badge-aes" style="font-size:0.7rem;">Identical MCU Assumptions across Intervals</span>
+            </div>
+            <p style="font-size:0.76rem;color:var(--text-secondary);margin:0 0 0.75rem 0;line-height:1.4;">
+              Demonstrates how transmission airtime governs overall system energy savings. With short radio airtime (0.50 ms), cryptographic efficiency yields a <strong>~12.9% whole-batch saving</strong>. With longer radio airtime (1.50 ms), radio transmission dominates the power budget (~73%), yielding a <strong>~6.6% whole-batch saving</strong>.
+            </p>
+            <div style="overflow-x:auto;">
+              <table class="data-table" style="font-size:0.78rem;">
+                <thead>
+                  <tr>
+                    <th>Radio TX Airtime (t<sub>tx</sub>)</th>
+                    <th>Baseline Batch Energy</th>
+                    <th>Adaptive Batch Energy</th>
+                    <th>Radio TX Energy</th>
+                    <th>Predicted Energy Saving (%)</th>
+                    <th>Model Assessment</th>
+                  </tr>
+                </thead>
+                <tbody id="radio-sweep-tbody">
+                  <!-- Dynamically populated rows -->
+                </tbody>
+              </table>
+            </div>
+            <div style="font-size:0.7rem;color:var(--text-muted);margin-top:0.4rem;">
+              *Evaluated across radio-active intervals under identical MCU clock, currents, and 45/55 workload split.
             </div>
           </div>
         </div>

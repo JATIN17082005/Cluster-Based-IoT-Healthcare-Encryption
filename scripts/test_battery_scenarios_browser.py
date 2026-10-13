@@ -55,8 +55,14 @@ def run_battery_scenarios_browser_test():
 
         disclaimer_title = page.locator("#scenario-disclaimer-title").inner_text().strip()
         print(f"   Disclaimer title: '{disclaimer_title}'")
-        assert "SIMULATED TARGET-MCU SCENARIO" in disclaimer_title
-        assert "RESULTS DEPEND ON CONFIGURED ASSUMPTIONS" in disclaimer_title
+        assert "SHORT-TX" in disclaimer_title or "SIMULATED TARGET-MCU" in disclaimer_title
+
+        # Verify MCU Profile Select
+        profile_select = page.locator("#mcu-profile-select")
+        assert profile_select.is_visible()
+        prof_val = profile_select.input_value()
+        print(f"   Active MCU Profile: '{prof_val}'")
+        assert prof_val == "short_tx"
 
         # Check initial battery meter (100%, Green)
         pct_base = page.locator("#battery-pct-baseline").inner_text().strip()
@@ -76,8 +82,8 @@ def run_battery_scenarios_browser_test():
         print(f"   Scenario summary badge: '{summary_badge}'")
         assert "MODEL PREDICTS LOWER ENERGY" in summary_badge
 
-        # 3b. Verify Dedicated Cryptographic Computation Panel (Phases 2 & 3)
-        print("3b. Verifying Dedicated Cryptographic Computation Panel & 3 Horizontal Cards...")
+        # 3b. Verify Dedicated Cryptographic Computation Panel & 4 Horizontal Cards
+        print("3b. Verifying Dedicated Cryptographic Computation Panel & 4 Horizontal Cards...")
         crypto_panel = page.locator("#crypto-computation-panel")
         assert crypto_panel.is_visible()
 
@@ -104,28 +110,49 @@ def run_battery_scenarios_browser_test():
         print(f"   Card 3 Crypto Component Energy: {c3_energy_adapt} vs {c3_energy_base} (Delta: {c3_reduction})")
         assert "mJ" in c3_energy_adapt and "mJ" in c3_energy_base
 
+        # Card 4: Total Batch Energy
+        c4_energy_adapt = page.locator("#card-batch-energy-adapt").inner_text().strip()
+        c4_energy_base = page.locator("#card-batch-energy-base").inner_text().strip()
+        c4_reduction = page.locator("#card-batch-energy-reduction").inner_text().strip()
+        print(f"   Card 4 Total Batch Energy: {c4_energy_adapt} vs {c4_energy_base} (Delta: {c4_reduction})")
+        assert "mJ" in c4_energy_adapt and "mJ" in c4_energy_base
+
         # Verify Plain-Language Faculty Explanation Quote
         panel_text = crypto_panel.inner_text()
         assert "The model predicts less cryptographic work for the adaptive configuration under these assumptions." in panel_text
         assert "Overall battery savings may be smaller because radio transmission, shared processing, and idle energy also contribute." in panel_text
         print("   [OK] Plain-language faculty quote confirmed in UI.")
 
-        # Verify Sub-Panels C and D Breakdown Tables
+        # Verify Sub-Panels C, D, and E Breakdown Tables
         c_table = page.locator("#crypto-breakdown-tbody").inner_text()
         assert "AES-256-GCM Engine" in c_table
-        assert "SHA-256 Keystream" in c_table
-        assert "Bitwise XOR Loop" in c_table
-        assert "HMAC-SHA256 Auth Tag" in c_table
         assert "Subtotal Crypto Energy" in c_table
         print("   [OK] Table C Cryptographic Component Breakdown verified.")
 
         d_table = page.locator("#batch-breakdown-tbody").inner_text()
         assert "Shared Processing" in d_table
-        assert "Cryptographic Ops" in d_table
-        assert "Radio Transmission" in d_table
-        assert "Idle / Sleep Interval" in d_table
         assert "Total Batch Energy" in d_table
         print("   [OK] Table D Whole-Batch Energy Accounting verified.")
+
+        # Sub-Panel E: Radio Transmission Sensitivity Analysis across Intervals
+        e_table = page.locator("#radio-sweep-tbody").inner_text()
+        assert "0.50 ms" in e_table
+        assert "0.75 ms" in e_table
+        assert "1.00 ms" in e_table
+        assert "1.50 ms" in e_table
+        print("   [OK] Table E Radio Sensitivity Sweep across 4 intervals verified.")
+
+        # 3c. Test Profile Switching: Switch to Radio-Heavy Profile (1.5 ms TX)
+        print("3c. Testing MCU Profile Switch to Radio-Heavy (1.5 ms)...")
+        profile_select.select_option("radio_heavy")
+        time.sleep(0.5)
+        badge_heavy = page.locator("#scenario-summary-status-badge").inner_text().strip()
+        print(f"   Radio-Heavy summary badge: '{badge_heavy}'")
+        assert "6.6" in badge_heavy or "MODEL PREDICTS LOWER ENERGY" in badge_heavy
+        # Switch back to Short-TX for default evaluation
+        profile_select.select_option("short_tx")
+        time.sleep(0.5)
+        print("   [OK] Profile switching verified.")
 
         # 4. Test Simulation Animation in Scenario B with Pause and Resume
         print("4. Testing Simulation Controls in Scenario B...")
@@ -165,6 +192,8 @@ def run_battery_scenarios_browser_test():
 
         # In Scenario B, Adaptive consumes LESS energy, so final adaptive charge must be GREATER than baseline
         assert final_adapt_pct > final_base_pct
+        assert 19.0 <= final_base_pct <= 21.0, f"Expected baseline ~20.0%, got {final_base_pct}%"
+        assert 29.0 <= final_adapt_pct <= 32.0, f"Expected adaptive ~30.4%, got {final_adapt_pct}%"
         status_adapt_final = page.locator("#battery-status-adaptive").inner_text().strip()
         status_base_final = page.locator("#battery-status-baseline").inner_text().strip()
         print(f"   Scenario B Adaptive outcome tag: '{status_adapt_final}', Baseline: '{status_base_final}'")

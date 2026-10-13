@@ -437,3 +437,123 @@ def test_proportional_visual_battery_scaling():
     assert (100.0 - adapt_drop_desk) < (100.0 - base_drop_desk)
 
 
+# --- Test 11: Two MCU Profiles (Short-TX 0.5ms vs Radio-Heavy 1.5ms) ---
+
+def test_mcu_profiles_short_tx_vs_radio_heavy(client):
+    """Verify both MCU profiles:
+    - Short-TX (0.5 ms TX airtime): cryptographic savings produce ~12.9% batch energy reduction.
+    - Radio-Heavy (1.5 ms TX airtime): radio dominates (~73%), yielding ~6.6% batch energy reduction.
+    - Cryptographic times, cycles, and crypto energies must be strictly identical across both profiles.
+    """
+    model = McuEnergyModel()
+
+    # 1. Short-TX Profile
+    res_short = model.calculate_scenario(100, 45, 55, profile_name="short_tx")
+    assert res_short["profile_id"] == "short_tx"
+    assert "0.5 ms" in res_short["profile_name"]
+    assert "COMPUTE-INTENSIVE" in res_short["provenance_label"]
+    assert "0.5 ms airtime" in res_short["provenance_disclaimer"]
+
+    saving_short = res_short["energy_comparison"]["energy_saving_percent"]
+    assert 12.5 < saving_short < 13.5  # ~12.91%
+    assert res_short["energy_comparison"]["result_status"] == "IMPROVEMENT"
+
+    # 2. Radio-Heavy Profile
+    res_heavy = model.calculate_scenario(100, 45, 55, profile_name="radio_heavy")
+    assert res_heavy["profile_id"] == "radio_heavy"
+    assert "1.5 ms" in res_heavy["profile_name"]
+    assert "SIMULATED TARGET-MCU" in res_heavy["provenance_label"]
+
+    saving_heavy = res_heavy["energy_comparison"]["energy_saving_percent"]
+    assert 6.0 < saving_heavy < 7.2  # ~6.63%
+    assert res_heavy["energy_comparison"]["result_status"] == "IMPROVEMENT"
+
+    # 3. Cryptographic metrics must be IDENTICAL between both profiles
+    assert abs(res_short["baseline"]["crypto_duration_ms"] - res_heavy["baseline"]["crypto_duration_ms"]) < 1e-6
+    assert abs(res_short["adaptive"]["crypto_duration_ms"] - res_heavy["adaptive"]["crypto_duration_ms"]) < 1e-6
+    assert abs(res_short["baseline"]["crypto_cpu_cycles"] - res_heavy["baseline"]["crypto_cpu_cycles"]) < 1e-6
+    assert abs(res_short["adaptive"]["crypto_cpu_cycles"] - res_heavy["adaptive"]["crypto_cpu_cycles"]) < 1e-6
+    assert abs(res_short["baseline"]["energy_crypto_joules"] - res_heavy["baseline"]["energy_crypto_joules"]) < 1e-6
+    assert abs(res_short["adaptive"]["energy_crypto_joules"] - res_heavy["adaptive"]["energy_crypto_joules"]) < 1e-6
+
+    # 4. API endpoint verification for profiles
+    resp_short_api = client.get("/api/battery/mcu-scenario?profile=short_tx")
+    assert resp_short_api.status_code == 200
+    assert resp_short_api.json()["profile_id"] == "short_tx"
+
+    resp_heavy_api = client.get("/api/battery/mcu-scenario?profile=radio_heavy")
+    assert resp_heavy_api.status_code == 200
+    assert resp_heavy_api.json()["profile_id"] == "radio_heavy"
+
+
+# --- Test 12: Radio Transmission Sensitivity Sweep Across Intervals ---
+
+def test_radio_sensitivity_sweep_across_intervals():
+    """Verify that the radio sensitivity sweep evaluates intervals [0.50, 0.75, 1.00, 1.50] ms
+    under identical MCU assumptions, showing monotonically decreasing percentage energy savings.
+    """
+    model = McuEnergyModel()
+    res = model.calculate_scenario(100, 45, 55, profile_name="short_tx")
+
+    sweep = res.get("radio_sensitivity_sweep", [])
+    assert len(sweep) == 4
+
+    expected_intervals = [0.50, 0.75, 1.00, 1.50]
+    savings = []
+
+    for idx, row in enumerate(sweep):
+        assert abs(row["interval_ms"] - expected_intervals[idx]) < 1e-3
+        assert row["baseline_energy_j"] > 0.0
+        assert row["adaptive_energy_j"] > 0.0
+        assert row["adaptive_energy_j"] < row["baseline_energy_j"]
+        assert row["is_improvement"] is True
+        savings.append(row["energy_saving_percent"])
+
+    # Monotonically decreasing savings as radio airtime increases
+    for i in range(len(savings) - 1):
+        assert savings[i] > savings[i + 1], f"Saving at {sweep[i]['interval_ms']}ms ({savings[i]}%) must be > saving at {sweep[i+1]['interval_ms']}ms ({savings[i+1]}%)"
+
+    assert savings[0] > 12.0  # 0.50 ms interval (~12.9%)
+    assert savings[-1] < 7.0  # 1.50 ms interval (~6.6%)
+
+
+# --- Test 13: High-Contrast Visual Scale (80% Visual Drain) Derivation ---
+
+def test_high_contrast_visual_battery_scaling_80_percent():
+    """Verify high-contrast 80% visual scaling calibrated for 10-second faculty review:
+    - Baseline meter drains by exactly 80.0% (100% -> 20.0%).
+    - In short-TX profile, adaptive drains proportionally by 80 * (8.472 / 9.733) = ~69.6%, ending at ~30.4%.
+    - Visual gap between baseline and adaptive is clearly visible (~10.4% difference).
+    - Modeled physical state (mAh, J) remains strictly separate from visual percentage.
+    """
+    nominal_mah = 1200.0
+    vcc = 3.3
+    model = McuEnergyModel()
+    res = model.calculate_scenario(100, 45, 55, profile_name="short_tx")
+
+    base_j = res["baseline"]["total_energy_joules"]
+    adapt_j = res["adaptive"]["total_energy_joules"]
+
+    target_base_drain = 80.0  # High-contrast faculty presentation scale
+    base_drop = target_base_drain
+    adapt_drop = base_drop * (adapt_j / base_j)
+
+    target_base_pct = 100.0 - base_drop
+    target_adapt_pct = 100.0 - adapt_drop
+
+    # Baseline ends at 20.0%
+    assert abs(target_base_pct - 20.0) < 1e-4
+
+    # Adaptive ends at ~30.4%
+    assert 29.5 < target_adapt_pct < 31.5
+    visual_gap = target_adapt_pct - target_base_pct
+    assert visual_gap > 9.5  # Distinct visible gap of ~10.4%
+
+    # Physical battery capacity used is a tiny fraction of 1200 mAh (realistic single batch)
+    base_mah_used = base_j / (vcc * 3.6)
+    adapt_mah_used = adapt_j / (vcc * 3.6)
+    assert 0.0005 < base_mah_used < 0.002
+    assert adapt_mah_used < base_mah_used
+
+
+

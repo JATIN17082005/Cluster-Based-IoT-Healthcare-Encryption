@@ -65,6 +65,8 @@ class McuScenarioRequest(BaseModel):
     record_count: Optional[int] = Field(default=None, ge=1, le=1000)
     high_sensitivity_count: Optional[int] = Field(default=None, ge=0)
     low_sensitivity_count: Optional[int] = Field(default=None, ge=0)
+    profile: Optional[str] = None
+    radio_tx_ms: Optional[float] = None
     config: Optional[McuHardwareScenarioConfig] = None
 
 
@@ -141,8 +143,12 @@ def get_mcu_scenario(
     record_count: Optional[int] = None,
     high_count: Optional[int] = None,
     low_count: Optional[int] = None,
+    profile: Optional[str] = None,
+    radio_tx_ms: Optional[float] = None,
 ):
-    """Calculate MCU scenario using query params, current demo records, or default 100-record batch."""
+    """Calculate MCU scenario using query params, current demo records, or default 100-record batch.
+    Supports profile ('radio_heavy' | 'short_tx') or explicit radio_tx_ms override.
+    """
     global current_demo_records, mcu_config
     if record_count is not None:
         rec_count = max(1, record_count)
@@ -166,6 +172,8 @@ def get_mcu_scenario(
         total_records=rec_count,
         high_sensitivity_count=high_cnt,
         low_sensitivity_count=low_cnt,
+        radio_tx_ms_override=radio_tx_ms,
+        profile_name=profile,
     )
 
 
@@ -197,6 +205,8 @@ def run_mcu_scenario(req: McuScenarioRequest):
         total_records=rec_count,
         high_sensitivity_count=high_cnt,
         low_sensitivity_count=low_cnt,
+        radio_tx_ms_override=req.radio_tx_ms,
+        profile_name=req.profile,
     )
 
 

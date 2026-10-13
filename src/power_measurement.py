@@ -288,11 +288,21 @@ class McuEnergyModel:
         total_records: int,
         high_sensitivity_count: int,
         low_sensitivity_count: int,
+        radio_tx_ms_override: Optional[float] = None,
+        profile_name: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Calculate non-overlapping energy breakdown for baseline (100% AES) vs adaptive (AES + XOR route).
         All parameters, record counts, and capacities are identical between baseline and adaptive.
+        Supports both Profile 1 (Radio-Heavy @ 1.5 ms) and Profile 2 (Compute-Intensive / Short-TX @ 0.5 ms).
         """
         cfg = self.config
+        if radio_tx_ms_override is not None:
+            cfg = cfg.model_copy(update={"t_radio_tx_ms": max(0.01, float(radio_tx_ms_override))})
+        elif profile_name in ["short_tx", "compute"]:
+            cfg = cfg.model_copy(update={"t_radio_tx_ms": 0.50})
+        elif profile_name in ["radio_heavy", "heavy"]:
+            cfg = cfg.model_copy(update={"t_radio_tx_ms": 1.50})
+
         v = cfg.supply_voltage_v
         n = max(1, total_records)
         n_high = max(0, high_sensitivity_count)
@@ -393,15 +403,74 @@ class McuEnergyModel:
             is_energy_metric=True,
         )
 
+        # Dynamic sensitivity comparison across radio transmission intervals: 0.5, 0.75, 1.0, 1.5 ms
+        sweep_intervals = [0.50, 0.75, 1.00, 1.50]
+        radio_sensitivity_sweep = []
+        for interval in sweep_intervals:
+            sw_tx_base_j = v * (cfg.radio_tx_current_ma / 1000.0) * ((n * interval) / 1000.0)
+            sw_idle_per_rec_b = max(0.0, cfg.t_duty_cycle_period_ms - (cfg.t_shared_proc_ms + cfg.t_aes_gcm_ms + interval))
+            sw_idle_base_j = v * (cfg.idle_sleep_current_ma / 1000.0) * ((n * sw_idle_per_rec_b) / 1000.0)
+            sw_base_j = e_proc_base_j + e_crypto_base_j + sw_tx_base_j + sw_idle_base_j
+
+            sw_idle_h_ms = n_high * max(0.0, cfg.t_duty_cycle_period_ms - (cfg.t_shared_proc_ms + cfg.t_aes_gcm_ms + interval))
+            sw_idle_r_ms = n_routine * max(0.0, cfg.t_duty_cycle_period_ms - (cfg.t_shared_proc_ms + xor_route_per_rec + interval))
+            sw_idle_adapt_j = v * (cfg.idle_sleep_current_ma / 1000.0) * ((sw_idle_h_ms + sw_idle_r_ms) / 1000.0)
+            sw_adapt_j = e_proc_adapt_j + e_crypto_adapt_j + sw_tx_base_j + sw_idle_adapt_j
+
+            sw_comp = compute_authoritative_comparison(
+                baseline_val=sw_base_j,
+                proposed_val=sw_adapt_j,
+                metric_name=f"Batch Energy at {interval}ms TX",
+                lower_is_better=True,
+                is_energy_metric=True,
+            )
+            radio_sensitivity_sweep.append({
+                "interval_ms": interval,
+                "baseline_energy_j": round(sw_base_j, 8),
+                "baseline_energy_mj": round(sw_base_j * 1000.0, 3),
+                "adaptive_energy_j": round(sw_adapt_j, 8),
+                "adaptive_energy_mj": round(sw_adapt_j * 1000.0, 3),
+                "crypto_energy_base_mj": round(e_crypto_base_j * 1000.0, 3),
+                "crypto_energy_adapt_mj": round(e_crypto_adapt_j * 1000.0, 3),
+                "tx_energy_mj": round(sw_tx_base_j * 1000.0, 3),
+                "energy_saving_percent": round(sw_comp.get("energy_saving_percent", 0.0), 2),
+                "direction": sw_comp.get("direction", ""),
+                "result_status": sw_comp.get("result_status", "INCONCLUSIVE"),
+                "is_improvement": sw_comp.get("is_improvement", False),
+            })
+
+        # Profile classification metadata
+        is_short_tx = (cfg.t_radio_tx_ms <= 0.60)
+        profile_id = "short_tx" if is_short_tx else "radio_heavy"
+        profile_name_str = (
+            "Compute-Intensive / Short-Transmission MCU Scenario (0.5 ms Radio TX)"
+            if is_short_tx
+            else "Radio-Heavy MCU Model (1.5 ms Radio TX)"
+        )
+        provenance_label_str = (
+            "COMPUTE-INTENSIVE / SHORT-TX MCU SCENARIO — CONFIGURABLE HYPOTHETICAL MODEL"
+            if is_short_tx
+            else "SIMULATED TARGET-MCU SCENARIO — RESULTS DEPEND ON CONFIGURED ASSUMPTIONS"
+        )
+        provenance_disclaimer_str = (
+            "Configurable hypothetical model for high-throughput short airtime radios (e.g., BLE 2Mbps / packed telemetry @ 0.5 ms TX airtime). "
+            "Valid only for workloads and radio settings that support 0.5 ms airtime. "
+            "Simulated values depend on configured clock, current, and airtime assumptions. Does not represent measured hardware."
+            if is_short_tx
+            else
+            "Illustrative mathematical energy model for a constrained target MCU without hardware AES acceleration. "
+            "Standard IoT radio scenario (802.15.4 / low-baud BLE @ 1.5 ms TX) where radio transmission dominates the power budget (~73%). "
+            "Requires empirical physical measurements on target hardware before real-world energy savings can be verified."
+        )
+
         return {
-            "scenario_name": "Constrained IoT Microcontroller — Simulated",
+            "scenario_name": profile_name_str,
+            "profile_id": profile_id,
+            "profile_name": profile_name_str,
             "mcu_model": cfg.mcu_model_name,
-            "provenance_label": "SIMULATED TARGET-MCU SCENARIO — RESULTS DEPEND ON CONFIGURED ASSUMPTIONS",
-            "provenance_disclaimer": (
-                "Illustrative mathematical energy model for a constrained target MCU without hardware AES acceleration. "
-                "Simulated values depend on configured clock, current, and cycle assumptions. "
-                "Requires empirical physical measurements on target hardware before real-world energy savings can be verified."
-            ),
+            "provenance_label": provenance_label_str,
+            "provenance_disclaimer": provenance_disclaimer_str,
+            "radio_sensitivity_sweep": radio_sensitivity_sweep,
             "record_count": n,
             "high_sensitivity_count": n_high,
             "low_sensitivity_count": n_routine,
