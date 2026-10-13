@@ -181,8 +181,8 @@ def run_redesign_verification():
         final_adapt_pct = float(page.locator("#battery-pct-adaptive").inner_text().replace("%", ""))
         print(f"   [OK] Battery Sim Completed: Baseline={final_base_pct}%, Adaptive={final_adapt_pct}%")
         assert final_base_pct < 100.0 and final_adapt_pct < 100.0
-        # In accordance with real regression, adaptive drains slightly more or equal
-        assert final_adapt_pct <= final_base_pct
+        # In Scenario B (MCU Simulation), Adaptive saves energy and retains higher charge:
+        assert final_adapt_pct >= final_base_pct
 
         page.screenshot(path=os.path.join(SCREENSHOT_DIR, "redesign_tab2_battery_sim.png"))
 
@@ -192,6 +192,18 @@ def run_redesign_verification():
         reset_pct = page.locator("#battery-pct-baseline").inner_text().strip()
         print(f"   [OK] Reset Battery Level: {reset_pct}")
         assert reset_pct == "100.0%"
+
+        # Also test Scenario A (Desktop Benchmark) in same session
+        page.select_option("#battery-scenario-select", "desktop")
+        time.sleep(0.5)
+        page.click("#btn-battery-start-demo")
+        time.sleep(3.5)
+        final_a_base = float(page.locator("#battery-pct-baseline").inner_text().replace("%", ""))
+        final_a_adapt = float(page.locator("#battery-pct-adaptive").inner_text().replace("%", ""))
+        print(f"   [OK] Desktop Scenario A Completed: Baseline={final_a_base}%, Adaptive={final_a_adapt}%")
+        assert final_a_adapt <= final_a_base
+        page.click("#btn-battery-reset")
+        time.sleep(0.3)
 
         # Verify Comparison Table Metrics
         comp_enc_base = page.locator("#comp-base-enc").inner_text().strip()

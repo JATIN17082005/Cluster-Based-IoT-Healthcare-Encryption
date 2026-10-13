@@ -218,15 +218,21 @@ class BenchmarkRunner:
             tx_active_s = (sent_count * self.power_model.tx_duration_ms_per_packet) / 1000.0
             total_duration_s = max(0.001, end_to_end_duration_ms / 1000.0)
 
+            # Non-overlapping activity intervals:
+            # 1. Dedicated crypto active intervals for AES and XOR routes
             aes_enc_s = (enc_total * (aes_count / max(1, sent_count))) / 1000.0
             xor_enc_s = (enc_total * (xor_count / max(1, sent_count))) / 1000.0
 
-            energy_mcu_j = (mean_v * (self.power_model.active_mcu_current_ma / 1000.0)) * total_duration_s
+            # 2. Shared non-crypto CPU processing interval (serialization, clustering, classification)
+            # Subtract crypto and TX intervals from total duration to guarantee non-overlapping accounting
+            proc_active_s = max(0.0, total_duration_s - (aes_enc_s + xor_enc_s + tx_active_s))
+
+            energy_proc_j = (mean_v * (self.power_model.active_mcu_current_ma / 1000.0)) * proc_active_s
             energy_aes_j = (mean_v * (self.power_model.aes_crypto_current_ma / 1000.0)) * aes_enc_s
             energy_xor_j = (mean_v * (self.power_model.xor_crypto_current_ma / 1000.0)) * xor_enc_s
             energy_tx_j = (mean_v * (self.power_model.tx_current_ma / 1000.0)) * tx_active_s
 
-            total_joules = energy_mcu_j + energy_aes_j + energy_xor_j + energy_tx_j
+            total_joules = energy_proc_j + energy_aes_j + energy_xor_j + energy_tx_j
             mean_p = (total_joules / total_duration_s) * 1000.0  # mW
             mean_i = mean_p / mean_v  # mA
 

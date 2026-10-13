@@ -124,6 +124,34 @@ class PowerModelConfig(BaseModel):
     battery_usable_factor: float = 0.85
 
 
+class McuHardwareScenarioConfig(BaseModel):
+    """Configurable parameters for the hypothetical constrained IoT microcontroller (Scenario B).
+    Models a bare-metal edge MCU without hardware AES acceleration (e.g. ARM Cortex-M0+ or AVR @ 16 MHz).
+    """
+    mcu_model_name: str = "ARM Cortex-M0+ (16 MHz, No AES Hardware)"
+    supply_voltage_v: float = 3.3
+    battery_nominal_mah: float = 1200.0
+    battery_usable_factor: float = 0.85
+
+    # Non-overlapping operational current draws (mA)
+    cpu_active_current_ma: float = 8.5
+    aes_active_current_ma: float = 9.8
+    sha256_active_current_ma: float = 8.2
+    xor_active_current_ma: float = 7.5
+    hmac_active_current_ma: float = 8.4
+    radio_tx_current_ma: float = 28.0
+    idle_sleep_current_ma: float = 0.015  # 15 uA
+
+    # Non-overlapping per-record operational timings (ms)
+    t_shared_proc_ms: float = 0.35       # Sensor sample reading, packaging, serialization
+    t_aes_gcm_ms: float = 1.25           # Software AES-256 + GHASH (~20,000 CPU cycles @ 16 MHz)
+    t_sha256_keystream_ms: float = 0.25  # SHA-256 block keystream generation (~4,000 cycles)
+    t_xor_stream_ms: float = 0.01        # Bitwise 64-byte XOR loop (~160 cycles)
+    t_hmac_sha256_ms: float = 0.38       # 2-pass HMAC-SHA256 authentication tag (~6,000 cycles)
+    t_radio_tx_ms: float = 1.50          # Radio packet transmission (802.15.4 / BLE)
+    t_duty_cycle_period_ms: float = 20.0 # Nominal packet cycle period for idle interval calculation
+
+
 class BatchMetrics(BaseModel):
     """Computed metrics for a single baseline or adaptive run."""
     run_id: str

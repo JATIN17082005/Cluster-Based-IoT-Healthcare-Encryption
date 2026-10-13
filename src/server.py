@@ -21,6 +21,7 @@ from src.models import (
     SensorRecord,
     BatchMetrics,
     PowerModelConfig,
+    McuHardwareScenarioConfig,
     EncryptionAlgorithm,
 )
 from src.data_generator import SyntheticDataGenerator
@@ -29,7 +30,7 @@ from src.cluster_manager import ClusterManager
 from src.crypto import KeyManager, EncryptionEngine, tamper_envelope
 from src.receiver import LocalHealthcareReceiver
 from src.benchmark_runner import BenchmarkRunner
-from src.power_measurement import CSVPowerImporter, SimulationPowerProvider
+from src.power_measurement import CSVPowerImporter, SimulationPowerProvider, McuEnergyModel
 from src.run_store import RunStore
 from src.metrics import compute_percentage_change, integrate_energy_joules
 
@@ -51,12 +52,20 @@ app.add_middleware(
 key_manager = KeyManager()
 receiver = LocalHealthcareReceiver(key_manager)
 power_config = PowerModelConfig()
+mcu_config = McuHardwareScenarioConfig()
 runner = BenchmarkRunner(key_manager=key_manager, receiver=receiver, power_model=power_config)
 run_store = RunStore()
 
 # State for currently generated demo batch
 current_demo_records: List[SensorRecord] = []
 current_power_override: Optional[Any] = None
+
+
+class McuScenarioRequest(BaseModel):
+    record_count: Optional[int] = Field(default=None, ge=1, le=1000)
+    high_sensitivity_count: Optional[int] = Field(default=None, ge=0)
+    low_sensitivity_count: Optional[int] = Field(default=None, ge=0)
+    config: Optional[McuHardwareScenarioConfig] = None
 
 
 class GenerateRequest(BaseModel):
@@ -111,6 +120,72 @@ def update_config(config_data: Dict[str, Any]):
         new_power = PowerModelConfig(**config_data["power_model"])
         runner.power_model = new_power
     return {"message": "Configuration updated successfully", "config": get_config()}
+
+
+@app.get("/api/battery/mcu-config")
+def get_mcu_config():
+    """Retrieve active MCU simulation assumptions for Scenario B."""
+    return mcu_config.model_dump()
+
+
+@app.post("/api/battery/mcu-config")
+def update_mcu_config(cfg_data: Dict[str, Any]):
+    """Update MCU simulation assumptions."""
+    global mcu_config
+    mcu_config = McuHardwareScenarioConfig(**cfg_data)
+    return {"message": "MCU configuration updated successfully", "config": mcu_config.model_dump()}
+
+
+@app.get("/api/battery/mcu-scenario")
+def get_mcu_scenario():
+    """Calculate MCU scenario using current demo records or default 100-record batch."""
+    global current_demo_records, mcu_config
+    if current_demo_records:
+        rec_count = len(current_demo_records)
+        high_cnt = sum(1 for r in current_demo_records if r.sensitivity == SensitivityLevel.HIGH)
+        low_cnt = rec_count - high_cnt
+    else:
+        rec_count = 100
+        high_cnt = 45
+        low_cnt = 55
+
+    model = McuEnergyModel(mcu_config)
+    return model.calculate_scenario(
+        total_records=rec_count,
+        high_sensitivity_count=high_cnt,
+        low_sensitivity_count=low_cnt,
+    )
+
+
+@app.post("/api/battery/mcu-scenario")
+def run_mcu_scenario(req: McuScenarioRequest):
+    """Calculate MCU Scenario B energy values for a requested record count and sensitivity split."""
+    global current_demo_records, mcu_config
+    active_cfg = req.config or mcu_config
+
+    if req.record_count is not None:
+        rec_count = req.record_count
+        if req.high_sensitivity_count is not None and req.low_sensitivity_count is not None:
+            high_cnt = req.high_sensitivity_count
+            low_cnt = req.low_sensitivity_count
+        else:
+            high_cnt = int(rec_count * 0.45)
+            low_cnt = rec_count - high_cnt
+    elif current_demo_records:
+        rec_count = len(current_demo_records)
+        high_cnt = sum(1 for r in current_demo_records if r.sensitivity == SensitivityLevel.HIGH)
+        low_cnt = rec_count - high_cnt
+    else:
+        rec_count = 100
+        high_cnt = 45
+        low_cnt = 55
+
+    model = McuEnergyModel(active_cfg)
+    return model.calculate_scenario(
+        total_records=rec_count,
+        high_sensitivity_count=high_cnt,
+        low_sensitivity_count=low_cnt,
+    )
 
 
 @app.post("/api/demo/generate")

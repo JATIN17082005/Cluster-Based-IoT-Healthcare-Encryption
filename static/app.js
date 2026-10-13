@@ -13,14 +13,26 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // Battery Drain Simulation State
   let simState = {
+    scenario: "mcu", // "desktop" | "mcu"
     baselinePct: 100.0,
     adaptivePct: 100.0,
     baselineJ: 0.0,
     adaptiveJ: 0.0,
+    baselineMah: 1200.0,
+    adaptiveMah: 1200.0,
     isSimulating: false,
     isPaused: false,
     timerId: null,
-    scale: 50, // 50x Presentation scale default
+    scale: 50, // Presentation scale
+    lastMcuData: null,
+    progress: 0,
+    stepsTotal: 30,
+    targetBasePct: 100.0,
+    targetAdaptPct: 100.0,
+    targetBaseJ: 0.0,
+    targetAdaptJ: 0.0,
+    targetBaseMahUsed: 0.0,
+    targetAdaptMahUsed: 0.0,
   };
 
   // Guided Demo Walkthrough State
@@ -81,21 +93,67 @@ document.addEventListener("DOMContentLoaded", () => {
   const btnCloseDrawer = document.getElementById("btn-close-drawer");
 
   // Battery Simulation Controls & Meters
+  const batteryScenarioSelect = document.getElementById("battery-scenario-select");
+  const scenarioBadgeHeader = document.getElementById("scenario-badge-header");
+  const scenarioPillTag = document.getElementById("scenario-pill-tag");
+  const scenarioDisclaimerBanner = document.getElementById("scenario-disclaimer-banner");
+  const scenarioDisclaimerTitle = document.getElementById("scenario-disclaimer-title");
+  const scenarioDisclaimerBody = document.getElementById("scenario-disclaimer-body");
+  const btnToggleMcuParams = document.getElementById("btn-toggle-mcu-params");
+  const mcuConfigDrawer = document.getElementById("mcu-config-drawer");
+  const btnApplyMcuConfig = document.getElementById("btn-apply-mcu-config");
+  const btnResetMcuDefaults = document.getElementById("btn-reset-mcu-defaults");
+
   const batteryFillBaseline = document.getElementById("battery-fill-baseline");
   const batteryFillAdaptive = document.getElementById("battery-fill-adaptive");
   const batteryPctBaseline = document.getElementById("battery-pct-baseline");
   const batteryPctAdaptive = document.getElementById("battery-pct-adaptive");
+  const batteryMahBaseline = document.getElementById("battery-mah-baseline");
+  const batteryMahAdaptive = document.getElementById("battery-mah-adaptive");
   const batteryJBaseline = document.getElementById("battery-j-baseline");
   const batteryJAdaptive = document.getElementById("battery-j-adaptive");
   const batteryStatusBaseline = document.getElementById("battery-status-baseline");
   const batteryStatusAdaptive = document.getElementById("battery-status-adaptive");
+  const batteryScenarioTagBaseline = document.getElementById("battery-scenario-tag-baseline");
+  const batteryScenarioTagAdaptive = document.getElementById("battery-scenario-tag-adaptive");
   const batteryCardBaseline = document.getElementById("battery-card-baseline");
   const batteryCardAdaptive = document.getElementById("battery-card-adaptive");
+
   const btnBatteryStartDemo = document.getElementById("btn-battery-start-demo");
   const btnBatteryPause = document.getElementById("btn-battery-pause");
   const btnBatteryResume = document.getElementById("btn-battery-resume");
   const btnBatteryReset = document.getElementById("btn-battery-reset");
+  const btnBatteryReplay = document.getElementById("btn-battery-replay");
   const simScaleSelect = document.getElementById("sim-scale-select");
+
+  // MCU Parameter Inputs
+  const mcuVcc = document.getElementById("mcu-vcc");
+  const mcuBatteryMah = document.getElementById("mcu-battery-mah");
+  const mcuICpu = document.getElementById("mcu-i-cpu");
+  const mcuIAes = document.getElementById("mcu-i-aes");
+  const mcuISha = document.getElementById("mcu-i-sha");
+  const mcuIXor = document.getElementById("mcu-i-xor");
+  const mcuIHmac = document.getElementById("mcu-i-hmac");
+  const mcuITx = document.getElementById("mcu-i-tx");
+  const mcuTAes = document.getElementById("mcu-t-aes");
+  const mcuTSha = document.getElementById("mcu-t-sha");
+  const mcuTXor = document.getElementById("mcu-t-xor");
+  const mcuTHmac = document.getElementById("mcu-t-hmac");
+
+  // Scenario Comparison Summary Elements
+  const scenarioSummaryStatusBadge = document.getElementById("scenario-summary-status-badge");
+  const simSumBaseJ = document.getElementById("sim-sum-base-j");
+  const simSumAdaptJ = document.getElementById("sim-sum-adapt-j");
+  const simSumDeltaJ = document.getElementById("sim-sum-delta-j");
+  const simSumDirJ = document.getElementById("sim-sum-dir-j");
+  const simSumBaseLat = document.getElementById("sim-sum-base-lat");
+  const simSumAdaptLat = document.getElementById("sim-sum-adapt-lat");
+  const simSumDeltaLat = document.getElementById("sim-sum-delta-lat");
+  const simSumDirLat = document.getElementById("sim-sum-dir-lat");
+  const simSumBaseHours = document.getElementById("sim-sum-base-hours");
+  const simSumAdaptHours = document.getElementById("sim-sum-adapt-hours");
+  const simSumDeltaHours = document.getElementById("sim-sum-delta-hours");
+  const simSumDirHours = document.getElementById("sim-sum-dir-hours");
 
   // Comparison Tab Elements
   const overallStatusBadge = document.getElementById("overall-status-badge");
@@ -422,6 +480,9 @@ document.addEventListener("DOMContentLoaded", () => {
       if (statRejected2) statRejected2.textContent = "0";
 
       highlightPipelineStep(2);
+      if (simState.scenario === "mcu") {
+        fetchMcuScenarioData();
+      }
       return data;
     } catch (err) {
       alert("Error generating data: " + err.message);
@@ -622,6 +683,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     // Evaluator Summary (FR-25)
     renderEvaluatorSummary(comp);
+    renderScenarioSummary(simState.scenario === "mcu" ? simState.lastMcuData : lastComparisonData);
   }
 
   function formatDeltaCell(deltaId, dirId, comparisonMetric) {
@@ -666,45 +728,54 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // =========================================================================
   // Battery Drain Simulation Feature (Special Visual Requirement)
+  // Two Scenarios: A (Current Desktop Benchmark) & B (Constrained MCU Simulated)
   // =========================================================================
   const MAX_BATTERY_SVG_WIDTH = 176; // Full width of fill bar inside SVG body
 
-  function updateBatteryVisual(target, pct, joules) {
+  function updateBatteryVisual(target, pct, joules, mah) {
     const clampedPct = Math.max(0, Math.min(100, pct));
     const fillWidth = (clampedPct / 100.0) * MAX_BATTERY_SVG_WIDTH;
+    const nominalCap = parseFloat(cfgBatteryMah ? cfgBatteryMah.value : "1200.0") || 1200.0;
+    const clampedMah = Math.max(0, Math.min(nominalCap, mah !== undefined ? mah : (nominalCap * clampedPct / 100.0)));
 
-    // Determine color
-    let fillColor = "#10b981"; // Emerald
+    // Determine color based on remaining charge
+    let fillColor = "#10b981"; // Emerald (>50%)
     if (clampedPct < 20) {
-      fillColor = "#f43f5e"; // Rose / Red
+      fillColor = "#f43f5e"; // Rose / Red (<20%)
     } else if (clampedPct < 50) {
-      fillColor = "#f59e0b"; // Amber
+      fillColor = "#f59e0b"; // Amber (20-50%)
     }
 
     if (target === "baseline") {
       batteryFillBaseline.setAttribute("width", fillWidth.toFixed(1));
       batteryFillBaseline.setAttribute("fill", fillColor);
       batteryPctBaseline.textContent = `${clampedPct.toFixed(1)}%`;
+      if (batteryMahBaseline) batteryMahBaseline.textContent = `(${clampedMah.toFixed(2)} mAh)`;
       batteryJBaseline.textContent = joules.toFixed(6);
     } else {
       batteryFillAdaptive.setAttribute("width", fillWidth.toFixed(1));
       batteryFillAdaptive.setAttribute("fill", fillColor);
       batteryPctAdaptive.textContent = `${clampedPct.toFixed(1)}%`;
+      if (batteryMahAdaptive) batteryMahAdaptive.textContent = `(${clampedMah.toFixed(2)} mAh)`;
       batteryJAdaptive.textContent = joules.toFixed(6);
     }
   }
 
   function resetBatterySim() {
     if (simState.timerId) clearInterval(simState.timerId);
+    const nominalCap = parseFloat(cfgBatteryMah ? cfgBatteryMah.value : "1200.0") || 1200.0;
     simState.baselinePct = 100.0;
     simState.adaptivePct = 100.0;
     simState.baselineJ = 0.0;
     simState.adaptiveJ = 0.0;
+    simState.baselineMah = nominalCap;
+    simState.adaptiveMah = nominalCap;
     simState.isSimulating = false;
     simState.isPaused = false;
+    simState.progress = 0;
 
-    updateBatteryVisual("baseline", 100.0, 0.0);
-    updateBatteryVisual("adaptive", 100.0, 0.0);
+    updateBatteryVisual("baseline", 100.0, 0.0, nominalCap);
+    updateBatteryVisual("adaptive", 100.0, 0.0, nominalCap);
 
     batteryStatusBaseline.textContent = "READY";
     batteryStatusBaseline.style.color = "var(--text-secondary)";
@@ -717,6 +788,242 @@ document.addEventListener("DOMContentLoaded", () => {
     btnBatteryStartDemo.disabled = false;
     btnBatteryPause.disabled = true;
     btnBatteryResume.disabled = true;
+    if (btnBatteryReplay) btnBatteryReplay.disabled = false;
+  }
+
+  async function fetchMcuScenarioData() {
+    try {
+      const resp = await fetch("/api/battery/mcu-scenario");
+      if (!resp.ok) throw new Error("Failed to fetch MCU scenario data");
+      const data = await resp.json();
+      simState.lastMcuData = data;
+      renderScenarioSummary(data);
+      return data;
+    } catch (err) {
+      console.warn("MCU Scenario fetch error:", err);
+      return null;
+    }
+  }
+
+  function renderScenarioSummary(data) {
+    if (!data) return;
+    const isMcu = (simState.scenario === "mcu");
+
+    if (isMcu) {
+      const base = data.baseline;
+      const adapt = data.adaptive;
+      const compEnergy = data.energy_comparison;
+      const compCrypto = data.crypto_time_comparison;
+
+      if (simSumBaseJ) simSumBaseJ.textContent = `${base.total_energy_joules.toFixed(6)} J`;
+      if (simSumAdaptJ) simSumAdaptJ.textContent = `${adapt.total_energy_joules.toFixed(6)} J`;
+      if (simSumDeltaJ) simSumDeltaJ.textContent = `${compEnergy.percentage_change > 0 ? "+" : ""}${compEnergy.percentage_change.toFixed(2)}%`;
+      if (simSumDirJ) {
+        simSumDirJ.textContent = compEnergy.direction;
+        simSumDirJ.style.color = compEnergy.is_improvement ? "var(--status-success)" : "var(--status-danger)";
+      }
+
+      if (simSumBaseLat) simSumBaseLat.textContent = `${base.crypto_duration_ms.toFixed(3)} ms`;
+      if (simSumAdaptLat) simSumAdaptLat.textContent = `${adapt.crypto_duration_ms.toFixed(3)} ms`;
+      if (simSumDeltaLat) simSumDeltaLat.textContent = `${compCrypto.percentage_change > 0 ? "+" : ""}${compCrypto.percentage_change.toFixed(2)}%`;
+      if (simSumDirLat) {
+        simSumDirLat.textContent = compCrypto.direction;
+        simSumDirLat.style.color = compCrypto.is_improvement ? "var(--status-success)" : "var(--status-danger)";
+      }
+
+      if (simSumBaseHours) simSumBaseHours.textContent = `${base.indicative_runtime_hours.toFixed(1)} hrs`;
+      if (simSumAdaptHours) simSumAdaptHours.textContent = `${adapt.indicative_runtime_hours.toFixed(1)} hrs`;
+      if (simSumDeltaHours) {
+        const hDelta = adapt.indicative_runtime_hours - base.indicative_runtime_hours;
+        simSumDeltaHours.textContent = `${hDelta >= 0 ? "+" : ""}${hDelta.toFixed(1)} hrs`;
+      }
+      if (simSumDirHours) {
+        simSumDirHours.textContent = "EXTENDED RUNTIME";
+        simSumDirHours.style.color = "var(--status-success)";
+      }
+
+      if (scenarioSummaryStatusBadge) {
+        scenarioSummaryStatusBadge.textContent = `SAVING (${compEnergy.energy_saving_percent > 0 ? "+" : ""}${compEnergy.energy_saving_percent.toFixed(2)}%)`;
+        scenarioSummaryStatusBadge.className = "badge badge-low";
+      }
+    } else {
+      // Desktop Scenario Summary
+      if (lastComparisonData) {
+        const base = lastComparisonData.baseline_summary;
+        const adapt = lastComparisonData.adaptive_summary;
+        const compEnergy = lastComparisonData.total_energy_joules;
+        const compEnc = lastComparisonData.encryption_time_mean_ms;
+
+        if (simSumBaseJ) simSumBaseJ.textContent = `${base.total_energy_joules.toFixed(6)} J`;
+        if (simSumAdaptJ) simSumAdaptJ.textContent = `${adapt.total_energy_joules.toFixed(6)} J`;
+        if (simSumDeltaJ) simSumDeltaJ.textContent = `${compEnergy.percentage_change > 0 ? "+" : ""}${compEnergy.percentage_change.toFixed(2)}%`;
+        if (simSumDirJ) {
+          simSumDirJ.textContent = compEnergy.direction;
+          simSumDirJ.style.color = compEnergy.is_improvement ? "var(--status-success)" : "var(--status-danger)";
+        }
+
+        if (simSumBaseLat) simSumBaseLat.textContent = `${(base.encryption_time_mean_ms * base.record_count).toFixed(3)} ms`;
+        if (simSumAdaptLat) simSumAdaptLat.textContent = `${(adapt.encryption_time_mean_ms * adapt.record_count).toFixed(3)} ms`;
+        if (simSumDeltaLat) simSumDeltaLat.textContent = `${compEnc.percentage_change > 0 ? "+" : ""}${compEnc.percentage_change.toFixed(2)}%`;
+        if (simSumDirLat) {
+          simSumDirLat.textContent = compEnc.direction;
+          simSumDirLat.style.color = compEnc.is_improvement ? "var(--status-success)" : "var(--status-danger)";
+        }
+
+        if (simSumBaseHours) simSumBaseHours.textContent = base.estimated_runtime_hours ? `${base.estimated_runtime_hours.toFixed(1)} hrs` : "N/A";
+        if (simSumAdaptHours) simSumAdaptHours.textContent = adapt.estimated_runtime_hours ? `${adapt.estimated_runtime_hours.toFixed(1)} hrs` : "N/A";
+        if (simSumDeltaHours) {
+          const dh = (adapt.estimated_runtime_hours || 0) - (base.estimated_runtime_hours || 0);
+          simSumDeltaHours.textContent = `${dh >= 0 ? "+" : ""}${dh.toFixed(1)} hrs`;
+        }
+        if (simSumDirHours) {
+          simSumDirHours.textContent = "REGRESSION ON DESKTOP";
+          simSumDirHours.style.color = "var(--status-danger)";
+        }
+
+        if (scenarioSummaryStatusBadge) {
+          scenarioSummaryStatusBadge.textContent = "STATUS: REGRESSION (+EXTRA JOULES)";
+          scenarioSummaryStatusBadge.className = "badge status-badge-regression";
+        }
+      }
+    }
+  }
+
+  function updateScenarioUI(scenario) {
+    simState.scenario = scenario;
+    const isMcu = (scenario === "mcu");
+
+    if (isMcu) {
+      if (scenarioBadgeHeader) scenarioBadgeHeader.textContent = "SIMULATED TARGET-MCU SCENARIO — RESULTS DEPEND ON CONFIGURED ASSUMPTIONS";
+      if (scenarioPillTag) {
+        scenarioPillTag.textContent = "SIMULATED TARGET-MCU SCENARIO";
+        scenarioPillTag.className = "badge badge-aes";
+      }
+      if (scenarioDisclaimerTitle) scenarioDisclaimerTitle.textContent = "SIMULATED TARGET-MCU SCENARIO — RESULTS DEPEND ON CONFIGURED ASSUMPTIONS";
+      if (scenarioDisclaimerBody) {
+        scenarioDisclaimerBody.textContent = "Evaluation platform: Simulated ARM Cortex-M0+ / 8-bit AVR edge microcontroller (16 MHz, 3.3V) without cryptographic hardware acceleration. Software AES-256-GCM takes ~20,000 cycles (~1.25 ms), while the lightweight XOR stream route takes ~10,000 cycles (~0.64 ms). This scenario is illustrative until validated against empirical target-board measurements.";
+      }
+      if (scenarioDisclaimerBanner) {
+        scenarioDisclaimerBanner.style.background = "rgba(14,165,233,0.08)";
+        scenarioDisclaimerBanner.style.borderColor = "rgba(14,165,233,0.3)";
+      }
+      if (btnToggleMcuParams) btnToggleMcuParams.style.display = "inline-flex";
+      if (batteryScenarioTagBaseline) batteryScenarioTagBaseline.textContent = "SCENARIO: MCU SIMULATION";
+      if (batteryScenarioTagAdaptive) batteryScenarioTagAdaptive.textContent = "SCENARIO: MCU SIMULATION";
+
+      fetchMcuScenarioData();
+    } else {
+      if (scenarioBadgeHeader) scenarioBadgeHeader.textContent = "SOFTWARE-MODEL ESTIMATE — NOT A PHYSICAL BATTERY READING";
+      if (scenarioPillTag) {
+        scenarioPillTag.textContent = "HOST x86-64 DESKTOP ESTIMATE";
+        scenarioPillTag.className = "badge status-badge-regression";
+      }
+      if (scenarioDisclaimerTitle) scenarioDisclaimerTitle.textContent = "SOFTWARE-MODEL ESTIMATE — NOT A PHYSICAL BATTERY READING";
+      if (scenarioDisclaimerBody) {
+        scenarioDisclaimerBody.textContent = "Evaluation platform: Host x86-64 CPU with Intel/AMD AES-NI hardware instructions. OpenSSL AES-256-GCM executes in dedicated silicon cycles, while Python XOR and HMAC loops incur interpreter overhead. Demonstrates realistic desktop regression. Do not claim battery savings on desktop.";
+      }
+      if (scenarioDisclaimerBanner) {
+        scenarioDisclaimerBanner.style.background = "rgba(244,63,94,0.08)";
+        scenarioDisclaimerBanner.style.borderColor = "rgba(244,63,94,0.3)";
+      }
+      if (btnToggleMcuParams) btnToggleMcuParams.style.display = "none";
+      if (mcuConfigDrawer) mcuConfigDrawer.style.display = "none";
+      if (batteryScenarioTagBaseline) batteryScenarioTagBaseline.textContent = "SCENARIO: DESKTOP (AES-NI)";
+      if (batteryScenarioTagAdaptive) batteryScenarioTagAdaptive.textContent = "SCENARIO: DESKTOP (AES-NI)";
+
+      renderScenarioSummary(lastComparisonData);
+    }
+
+    resetBatterySim();
+  }
+
+  if (batteryScenarioSelect) {
+    batteryScenarioSelect.addEventListener("change", (e) => {
+      updateScenarioUI(e.target.value);
+    });
+  }
+
+  if (btnToggleMcuParams && mcuConfigDrawer) {
+    btnToggleMcuParams.addEventListener("click", () => {
+      mcuConfigDrawer.style.display = (mcuConfigDrawer.style.display === "none" || !mcuConfigDrawer.style.display) ? "block" : "none";
+    });
+  }
+
+  if (btnApplyMcuConfig) {
+    btnApplyMcuConfig.addEventListener("click", async () => {
+      const customCfg = {
+        supply_voltage_v: parseFloat(mcuVcc.value) || 3.3,
+        battery_nominal_mah: parseFloat(mcuBatteryMah.value) || 1200.0,
+        cpu_active_current_ma: parseFloat(mcuICpu.value) || 8.5,
+        aes_active_current_ma: parseFloat(mcuIAes.value) || 9.8,
+        sha256_active_current_ma: parseFloat(mcuISha.value) || 8.2,
+        xor_active_current_ma: parseFloat(mcuIXor.value) || 7.5,
+        hmac_active_current_ma: parseFloat(mcuIHmac.value) || 8.4,
+        radio_tx_current_ma: parseFloat(mcuITx.value) || 28.0,
+        t_aes_gcm_ms: parseFloat(mcuTAes.value) || 1.25,
+        t_sha256_keystream_ms: parseFloat(mcuTSha.value) || 0.25,
+        t_xor_stream_ms: parseFloat(mcuTXor.value) || 0.01,
+        t_hmac_sha256_ms: parseFloat(mcuTHmac.value) || 0.38,
+      };
+
+      try {
+        await fetch("/api/battery/mcu-config", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(customCfg),
+        });
+        showToast("MCU assumptions updated successfully.");
+        await fetchMcuScenarioData();
+        resetBatterySim();
+      } catch (err) {
+        showToast("Failed to update MCU parameters: " + err.message, "danger");
+      }
+    });
+  }
+
+  if (btnResetMcuDefaults) {
+    btnResetMcuDefaults.addEventListener("click", async () => {
+      if (mcuVcc) mcuVcc.value = "3.3";
+      if (mcuBatteryMah) mcuBatteryMah.value = "1200.0";
+      if (mcuICpu) mcuICpu.value = "8.5";
+      if (mcuIAes) mcuIAes.value = "9.8";
+      if (mcuISha) mcuISha.value = "8.2";
+      if (mcuIXor) mcuIXor.value = "7.5";
+      if (mcuIHmac) mcuIHmac.value = "8.4";
+      if (mcuITx) mcuITx.value = "28.0";
+      if (mcuTAes) mcuTAes.value = "1.25";
+      if (mcuTSha) mcuTSha.value = "0.25";
+      if (mcuTXor) mcuTXor.value = "0.01";
+      if (mcuTHmac) mcuTHmac.value = "0.38";
+
+      const defaultCfg = {
+        supply_voltage_v: 3.3,
+        battery_nominal_mah: 1200.0,
+        cpu_active_current_ma: 8.5,
+        aes_active_current_ma: 9.8,
+        sha256_active_current_ma: 8.2,
+        xor_active_current_ma: 7.5,
+        hmac_active_current_ma: 8.4,
+        radio_tx_current_ma: 28.0,
+        t_aes_gcm_ms: 1.25,
+        t_sha256_keystream_ms: 0.25,
+        t_xor_stream_ms: 0.01,
+        t_hmac_sha256_ms: 0.38,
+      };
+
+      try {
+        await fetch("/api/battery/mcu-config", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(defaultCfg),
+        });
+        showToast("Reset MCU defaults applied.");
+        await fetchMcuScenarioData();
+        resetBatterySim();
+      } catch (err) {
+        showToast("Failed to reset defaults: " + err.message, "danger");
+      }
+    });
   }
 
   btnBatteryReset.addEventListener("click", resetBatterySim);
@@ -727,31 +1034,65 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
-  btnBatteryStartDemo.addEventListener("click", async () => {
+  async function runBatterySimDemo() {
     resetBatterySim();
     btnBatteryStartDemo.disabled = true;
     btnBatteryPause.disabled = false;
+    if (btnBatteryReplay) btnBatteryReplay.disabled = true;
 
-    // If no comparison data yet, execute one first
-    if (!lastComparisonData) {
-      const comp = await runComparison();
-      if (!comp) {
+    let baseTotalJ = 0.0;
+    let adaptTotalJ = 0.0;
+    let nominalMah = 1200.0;
+    let vcc = 3.3;
+
+    if (simState.scenario === "desktop") {
+      // Scenario A: Desktop Benchmark
+      if (!lastComparisonData) {
+        const comp = await runComparison();
+        if (!comp) {
+          btnBatteryStartDemo.disabled = false;
+          btnBatteryPause.disabled = true;
+          if (btnBatteryReplay) btnBatteryReplay.disabled = false;
+          return;
+        }
+      }
+      baseTotalJ = lastComparisonData.baseline_summary.total_energy_joules;
+      adaptTotalJ = lastComparisonData.adaptive_summary.total_energy_joules;
+      nominalMah = parseFloat(cfgBatteryMah ? cfgBatteryMah.value : "1200.0") || 1200.0;
+      vcc = 3.3;
+    } else {
+      // Scenario B: Constrained MCU Simulated
+      const mcuData = await fetchMcuScenarioData();
+      if (!mcuData) {
+        showToast("Unable to load MCU scenario model", "danger");
         btnBatteryStartDemo.disabled = false;
+        btnBatteryPause.disabled = true;
+        if (btnBatteryReplay) btnBatteryReplay.disabled = false;
         return;
       }
+      baseTotalJ = mcuData.baseline.total_energy_joules;
+      adaptTotalJ = mcuData.adaptive.total_energy_joules;
+      nominalMah = mcuData.config.battery_nominal_mah || 1200.0;
+      vcc = mcuData.config.supply_voltage_v || 3.3;
     }
 
-    const baseTotalJ = lastComparisonData.baseline_summary.total_energy_joules;
-    const adaptTotalJ = lastComparisonData.adaptive_summary.total_energy_joules;
+    // Battery theoretical capacity in Joules:
+    // Capacity (Joules) = nominal_mah * V * 3.6
+    const totalCapacityJoules = nominalMah * vcc * 3.6;
 
-    // Theoretical drain percentage scaled for demo
-    // Battery capacity 1200 mAh @ 3.3V = 14256 Joules.
-    // Scaled drain drops by percentage proportional to Joules:
-    const baseDrop = Math.min(45, (baseTotalJ / 14256.0) * 100.0 * simState.scale * 200);
-    const adaptDrop = Math.min(48, (adaptTotalJ / 14256.0) * 100.0 * simState.scale * 200);
+    // Visual Presentation Scale:
+    // Controls animation drop rate only, leaving underlying Joules and mAh exact!
+    const scaleFactor = simState.scale * 200;
+    const baseDrop = Math.min(65.0, (baseTotalJ / totalCapacityJoules) * 100.0 * scaleFactor);
+    const adaptDrop = Math.min(65.0, (adaptTotalJ / totalCapacityJoules) * 100.0 * scaleFactor);
 
-    const targetBasePct = Math.max(5, 100.0 - baseDrop);
-    const targetAdaptPct = Math.max(3, 100.0 - adaptDrop);
+    const targetBasePct = Math.max(5.0, 100.0 - baseDrop);
+    const targetAdaptPct = Math.max(5.0, 100.0 - adaptDrop);
+
+    simState.targetBasePct = targetBasePct;
+    simState.targetAdaptPct = targetAdaptPct;
+    simState.targetBaseJ = baseTotalJ;
+    simState.targetAdaptJ = adaptTotalJ;
 
     simState.isSimulating = true;
     batteryCardBaseline.classList.add("discharging", "active-run");
@@ -769,15 +1110,18 @@ document.addEventListener("DOMContentLoaded", () => {
       if (simState.isPaused) return;
 
       progress++;
+      simState.progress = progress;
       const fraction = progress / STEPS;
 
       const curBasePct = 100.0 - (100.0 - targetBasePct) * fraction;
       const curAdaptPct = 100.0 - (100.0 - targetAdaptPct) * fraction;
       const curBaseJ = baseTotalJ * fraction;
       const curAdaptJ = adaptTotalJ * fraction;
+      const curBaseMah = nominalMah - (nominalMah * (100.0 - curBasePct) / 100.0);
+      const curAdaptMah = nominalMah - (nominalMah * (100.0 - curAdaptPct) / 100.0);
 
-      updateBatteryVisual("baseline", curBasePct, curBaseJ);
-      updateBatteryVisual("adaptive", curAdaptPct, curAdaptJ);
+      updateBatteryVisual("baseline", curBasePct, curBaseJ, curBaseMah);
+      updateBatteryVisual("adaptive", curAdaptPct, curAdaptJ, curAdaptMah);
 
       if (progress >= STEPS) {
         clearInterval(simState.timerId);
@@ -785,17 +1129,36 @@ document.addEventListener("DOMContentLoaded", () => {
         batteryCardBaseline.classList.remove("discharging");
         batteryCardAdaptive.classList.remove("discharging");
 
-        batteryStatusBaseline.textContent = "DEMO COMPLETE";
-        batteryStatusBaseline.style.color = "var(--status-success)";
-        batteryStatusAdaptive.textContent = "DEMO COMPLETE";
-        batteryStatusAdaptive.style.color = "var(--status-danger)";
+        if (simState.scenario === "desktop") {
+          // On Desktop: adaptive consumes slightly more energy due to interpreter overhead
+          batteryStatusBaseline.textContent = "FINISHED";
+          batteryStatusBaseline.style.color = "var(--status-warning)";
+          batteryStatusAdaptive.textContent = "FINISHED (REGRESSION)";
+          batteryStatusAdaptive.style.color = "var(--status-danger)";
+        } else {
+          // On MCU: adaptive saves energy because software AES is much heavier
+          batteryStatusBaseline.textContent = "DEPLETED MORE";
+          batteryStatusBaseline.style.color = "var(--status-warning)";
+          batteryStatusAdaptive.textContent = "SAVING VERIFIED (+)";
+          batteryStatusAdaptive.style.color = "var(--status-success)";
+        }
 
         btnBatteryStartDemo.disabled = false;
         btnBatteryPause.disabled = true;
         btnBatteryResume.disabled = true;
+        if (btnBatteryReplay) btnBatteryReplay.disabled = false;
       }
     }, intervalMs);
-  });
+  }
+
+  btnBatteryStartDemo.addEventListener("click", runBatterySimDemo);
+
+  if (btnBatteryReplay) {
+    btnBatteryReplay.addEventListener("click", () => {
+      resetBatterySim();
+      runBatterySimDemo();
+    });
+  }
 
   btnBatteryPause.addEventListener("click", () => {
     if (simState.isSimulating && !simState.isPaused) {
@@ -1230,6 +1593,8 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   // Initial load
+  updateScenarioUI("mcu");
   generateData();
   loadHistory();
 });
+
