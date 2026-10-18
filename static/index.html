@@ -585,7 +585,7 @@
             <span id="scenario-disclaimer-title">SIMULATED TARGET-MCU SCENARIO &mdash; RESULTS DEPEND ON CONFIGURED ASSUMPTIONS</span>
           </div>
           <p id="scenario-disclaimer-body" style="color:var(--text-secondary);margin:0;">
-            Evaluation platform: Simulated ARM Cortex-M0+ / 8-bit AVR edge microcontroller (16 MHz, 3.3V) without cryptographic hardware acceleration. Software AES-256-GCM takes ~20,000 cycles (~1.25 ms), while the lightweight XOR stream route takes ~10,000 cycles (~0.64 ms). This scenario is illustrative until validated against empirical target-board measurements.
+            Evaluation platform: Simulated ARM Cortex-M0+ / 8-bit AVR edge microcontroller (16 MHz, 3.3V) without cryptographic hardware acceleration. Software AES-256-GCM takes ~20,000 cycles (~1.25 ms), while the composite lightweight stream route takes 10,240 cycles (~0.64 ms). This scenario is illustrative until validated against empirical target-board measurements.
           </p>
         </div>
 
@@ -1256,7 +1256,7 @@
                 </div>
                 <div style="font-size:0.8rem;font-weight:600;color:#fff;margin-bottom:0.25rem;">MODELED_ESTIMATED_MCU</div>
                 <p style="font-size:0.74rem;color:var(--text-secondary);margin:0;line-height:1.4;">
-                  Physics-based mathematical model (<span style="color:var(--brand-cyan);font-family:var(--font-mono);">E = V &times; I &times; t</span>) representing edge microcontrollers lacking AES hardware. Cryptographic work drops ~31%, translating to 6.6%&ndash;12.9% whole-batch energy savings.
+                  Physics-based mathematical model (<span style="color:var(--brand-cyan);font-family:var(--font-mono);">E = V &times; I &times; t</span>) representing edge microcontrollers lacking AES hardware. Per-operation cryptographic energy drops 56.6% on routine records (31.1% batch cryptographic reduction), translating to 6.6%&ndash;12.9% whole-batch energy savings.
                 </p>
               </div>
 

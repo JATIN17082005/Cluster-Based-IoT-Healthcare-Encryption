@@ -69,6 +69,11 @@ $$E_{\text{batch}} = V_{\text{cc}} \times \left( \sum_{\text{record} \in \text{A
 - Assumes square-wave current transitions without capacitive inrush spikes.
 - Reflects software model assumptions rather than physical electrochemical cells.
 
+> [!NOTE]
+> **Separation of Power Configurations:**
+> The parameters above belong to `PowerModelConfig` (used by `SimulationPowerProvider` to model a high-clock $64\,\text{MHz}$ wireless SoC with dedicated hardware crypto coprocessors).
+> In contrast, the constrained microcontroller model (Scenario B, detailed in Section 7) uses `McuHardwareScenarioConfig` representing a low-power $16\,\text{MHz}$ CPU (ARM Cortex-M0+ / AVR) without hardware cryptographic acceleration, with microampere sleep modes ($15\,\mu\text{A}$) and non-overlapping execution intervals.
+
 ---
 
 ## 5. Mode B — Physical Power Measurement & Lab CSV Integration
@@ -133,22 +138,44 @@ $$\text{Cycles} = \text{Duration (ms)} \times 16,000 \quad \left(1\,\text{ms} = 
 
 ### Cryptographic Stage Comparison per Record:
 
+The active microcontroller configuration (`McuHardwareScenarioConfig`) models a 3.3V rail and 16 MHz clock with the following non-overlapping stages:
+
 | Operation | Stage / Algorithm | Duration ($t$) | Current ($I$) | Cycles @ $16\,\text{MHz}$ | Energy ($V_{\text{rail}} \cdot I \cdot t$) |
 |---|---|---|---|---|---|
-| **Baseline High/Routine** | AES-128/256 software | $1.250\,\text{ms}$ | $12.5\,\text{mA}$ | $20,000$ | $0.05156\,\text{mJ}$ |
-| **Adaptive High-Sensitivity** | AES-256-GCM | $1.250\,\text{ms}$ | $12.5\,\text{mA}$ | $20,000$ | $0.05156\,\text{mJ}$ |
-| **Adaptive Routine (SHA-256)** | SHA-256 block hash | $0.400\,\text{ms}$ | $10.5\,\text{mA}$ | $6,400$ | $0.01386\,\text{mJ}$ |
-| **Adaptive Routine (XOR)** | Streaming bitwise XOR | $0.090\,\text{ms}$ | $7.5\,\text{mA}$ | $1,440$ | $0.00223\,\text{mJ}$ |
-| **Adaptive Routine (HMAC)** | HMAC-SHA256 tag | $0.150\,\text{ms}$ | $10.5\,\text{mA}$ | $2,400$ | $0.00520\,\text{mJ}$ |
-| **Adaptive Routine Composite** | SHA + XOR + HMAC | **$0.640\,\text{ms}$** | **$9.61\,\text{mA}$ avg** | **$10,240$** | **$0.02129\,\text{mJ}$** |
+| **Baseline High/Routine** | Software AES-256-GCM | $1.250\,\text{ms}$ | $9.8\,\text{mA}$ | $20,000$ | $0.040425\,\text{mJ}$ |
+| **Adaptive High-Sensitivity** | Software AES-256-GCM | $1.250\,\text{ms}$ | $9.8\,\text{mA}$ | $20,000$ | $0.040425\,\text{mJ}$ |
+| **Adaptive Routine (SHA-256)** | SHA-256 block keystream | $0.250\,\text{ms}$ | $8.2\,\text{mA}$ | $4,000$ | $0.006765\,\text{mJ}$ |
+| **Adaptive Routine (XOR)** | Streaming bitwise XOR | $0.010\,\text{ms}$ | $7.5\,\text{mA}$ | $160$ | $0.0002475\,\text{mJ}$ |
+| **Adaptive Routine (HMAC)** | HMAC-SHA256 Auth Tag | $0.380\,\text{ms}$ | $8.4\,\text{mA}$ | $6,080$ | $0.0105336\,\text{mJ}$ |
+| **Adaptive Routine Composite** | SHA + XOR + HMAC | **$0.640\,\text{ms}$** | **$8.31\,\text{mA}$ avg** | **$10,240$** | **$0.0175461\,\text{mJ}$** |
 
 In addition, each record undergoes shared sensor preprocessing:
-- **Sensor Preprocessing ($t_{\text{proc}}$):** $0.350\,\text{ms}$ ($5,600$ cycles) at $8.0\,\text{mA}$ ($0.00924\,\text{mJ}$).
+- **Sensor Preprocessing ($t_{\text{proc}}$):** $0.350\,\text{ms}$ ($5,600$ cycles) at $8.5\,\text{mA}$ ($0.0098175\,\text{mJ}$).
 
-### Computational Efficiency Gain:
-For routine telemetry records, transitioning from software AES to the composite SHA-256 + XOR + HMAC route yields:
+### Computational Efficiency Gain (Per Routine Operation):
+For routine telemetry records, transitioning from software AES-256 to the composite SHA-256 + XOR + HMAC route yields:
 $$\Delta \text{Cycles} = \frac{20,000 - 10,240}{20,000} \times 100\% = 48.80\% \text{ reduction in cryptographic CPU cycles}$$
-$$\Delta E_{\text{crypto}} = \frac{0.05156\,\text{mJ} - 0.02129\,\text{mJ}}{0.05156\,\text{mJ}} \times 100\% = 58.71\% \text{ reduction in cryptographic energy}$$
+$$\Delta t_{\text{crypto}} = \frac{1.250\,\text{ms} - 0.640\,\text{ms}}{1.250\,\text{ms}} \times 100\% = 48.80\% \text{ reduction in cryptographic execution time}$$
+$$\Delta E_{\text{crypto}} = \frac{0.040425\,\text{mJ} - 0.0175461\,\text{mJ}}{0.040425\,\text{mJ}} \times 100\% = 56.60\% \text{ reduction in per-operation cryptographic energy}$$
+
+### Separation of Per-Operation Cryptographic Energy and Total-Batch Energy
+
+It is academically and practically vital to distinguish isolated per-operation cryptographic savings from total whole-device battery savings:
+
+1. **Per-Operation Cryptographic Saving ($56.60\%$):**
+   Applies strictly to the isolated cryptographic calculation on routine records ($0.040425\,\text{mJ} \rightarrow 0.0175461\,\text{mJ}$). High-sensitivity records still execute full AES-256-GCM ($0.040425\,\text{mJ}$).
+2. **Whole-Batch Cryptographic Saving ($31.13\%$):**
+   For a reference 100-record batch with 45 High-Sensitivity and 55 Routine records:
+   - Baseline batch crypto: $100 \times 0.040425\,\text{mJ} = 4.0425\,\text{mJ}$
+   - Adaptive batch crypto: $45 \times 0.040425\,\text{mJ} + 55 \times 0.0175461\,\text{mJ} = 1.819125 + 0.9650355 = 2.7841605\,\text{mJ}$
+   - Batch crypto saving: $\frac{4.0425 - 2.7841605}{4.0425} \times 100\% = 31.13\%$
+3. **Whole-Batch Total Device Energy Saving ($6.63\%$ to $12.91\%$):**
+   When shared sensor preprocessing ($0.35\,\text{ms}$ at $8.5\,\text{mA} = 0.982\,\text{mJ}$/batch), radio transmission ($28\,\text{mA}$), and deep sleep ($15\,\mu\text{A}$) are included:
+   - **Compute-Intensive / Short-TX ($0.50\,\text{ms}$ TX airtime):** Cryptographic work accounts for 44% of total energy; adaptive routing produces **~12.91%** batch energy savings.
+   - **Radio-Heavy MCU Model ($1.50\,\text{ms}$ TX airtime):** Radio transmission dominates (73% of energy); adaptive routing produces **~6.63%** batch energy savings.
+
+> [!WARNING]
+> The per-operation cryptographic energy reduction of $56.60\%$ must **never** be cited as whole-device battery life extension. Radio transmission and sensor sampling remain dominant energy consumers in wireless IoT devices.
 
 ---
 

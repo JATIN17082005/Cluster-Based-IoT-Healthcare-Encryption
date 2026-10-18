@@ -169,3 +169,175 @@ def test_hardware_adapter_placeholder_provenance():
     with pytest.raises(ConnectionError, match="No hardware power sensor"):
         adapter.start_sampling()
 
+
+def test_configured_operation_timings_and_cycles():
+    """Verify that McuHardwareScenarioConfig timings match the active model and convert
+    to exact cycle counts via cycles = duration_ms * 16,000 at 16 MHz.
+    """
+    cfg = McuHardwareScenarioConfig()
+
+    assert cfg.supply_voltage_v == 3.3
+    assert cfg.mcu_clock_hz == 16_000_000.0
+    clock_khz = cfg.mcu_clock_hz / 1000.0  # 16,000 cycles per ms
+
+    # Configured durations (ms)
+    assert cfg.t_shared_proc_ms == 0.35
+    assert cfg.t_aes_gcm_ms == 1.25
+    assert cfg.t_sha256_keystream_ms == 0.25
+    assert cfg.t_xor_stream_ms == 0.01
+    assert cfg.t_hmac_sha256_ms == 0.38
+    assert cfg.idle_sleep_current_ma == 0.015
+
+    # Cycles = duration_ms * 16,000
+    cycles_proc = cfg.t_shared_proc_ms * clock_khz
+    cycles_aes = cfg.t_aes_gcm_ms * clock_khz
+    cycles_sha = cfg.t_sha256_keystream_ms * clock_khz
+    cycles_xor = cfg.t_xor_stream_ms * clock_khz
+    cycles_hmac = cfg.t_hmac_sha256_ms * clock_khz
+    cycles_composite_routine = cycles_sha + cycles_xor + cycles_hmac
+
+    assert math.isclose(cycles_proc, 5600.0, rel_tol=1e-6)
+    assert math.isclose(cycles_aes, 20000.0, rel_tol=1e-6)
+    assert math.isclose(cycles_sha, 4000.0, rel_tol=1e-6)
+    assert math.isclose(cycles_xor, 160.0, rel_tol=1e-6)
+    assert math.isclose(cycles_hmac, 6080.0, rel_tol=1e-6)
+    assert math.isclose(cycles_composite_routine, 10240.0, rel_tol=1e-6)
+
+    # Per-operation cryptographic cycle saving
+    cycle_saving_pct = ((cycles_aes - cycles_composite_routine) / cycles_aes) * 100.0
+    assert math.isclose(cycle_saving_pct, 48.80, abs_tol=0.01)
+
+
+def test_per_operation_cryptographic_energies():
+    """Verify per-operation cryptographic energies (V * I * t) derived from configured currents and durations:
+    AES-GCM = 0.040425 mJ, SHA-256 = 0.006765 mJ, XOR = 0.0002475 mJ, HMAC = 0.0105336 mJ, Combined = 0.0175461 mJ.
+    """
+    cfg = McuHardwareScenarioConfig()
+    v = cfg.supply_voltage_v  # 3.3 V
+
+    assert cfg.cpu_active_current_ma == 8.5
+    assert cfg.aes_active_current_ma == 9.8
+    assert cfg.sha256_active_current_ma == 8.2
+    assert cfg.xor_active_current_ma == 7.5
+    assert cfg.hmac_active_current_ma == 8.4
+
+    # Energies in Joules: V * (mA / 1000) * (ms / 1000)
+    e_aes_j = v * (cfg.aes_active_current_ma / 1000.0) * (cfg.t_aes_gcm_ms / 1000.0)
+    e_sha_j = v * (cfg.sha256_active_current_ma / 1000.0) * (cfg.t_sha256_keystream_ms / 1000.0)
+    e_xor_j = v * (cfg.xor_active_current_ma / 1000.0) * (cfg.t_xor_stream_ms / 1000.0)
+    e_hmac_j = v * (cfg.hmac_active_current_ma / 1000.0) * (cfg.t_hmac_sha256_ms / 1000.0)
+    e_composite_j = e_sha_j + e_xor_j + e_hmac_j
+    e_proc_j = v * (cfg.cpu_active_current_ma / 1000.0) * (cfg.t_shared_proc_ms / 1000.0)
+
+    # In mJ (1 J = 1000 mJ)
+    assert math.isclose(e_aes_j * 1000.0, 0.040425, rel_tol=1e-6)
+    assert math.isclose(e_sha_j * 1000.0, 0.006765, rel_tol=1e-6)
+    assert math.isclose(e_xor_j * 1000.0, 0.0002475, rel_tol=1e-6)
+    assert math.isclose(e_hmac_j * 1000.0, 0.0105336, rel_tol=1e-6)
+    assert math.isclose(e_composite_j * 1000.0, 0.0175461, rel_tol=1e-6)
+    assert math.isclose(e_proc_j * 1000.0, 0.0098175, rel_tol=1e-6)
+
+    # Per-operation cryptographic energy saving
+    per_op_crypto_saving_pct = ((e_aes_j - e_composite_j) / e_aes_j) * 100.0
+    assert math.isclose(per_op_crypto_saving_pct, 56.595918, abs_tol=0.01)
+
+    # Per-operation saving (~56.6%) is distinctly different from batch energy savings
+    assert per_op_crypto_saving_pct > 50.0
+
+
+def test_reference_100_record_breakdown_matches_active_config():
+    """Verify that calculate_scenario with standard 45/55 workload produces exact
+    reconciled batch cryptographic energies and deltas.
+    """
+    cfg = McuHardwareScenarioConfig()
+    model = McuEnergyModel(cfg)
+    res = model.calculate_scenario(
+        total_records=100,
+        high_sensitivity_count=45,
+        low_sensitivity_count=55,
+    )
+
+    base = res["baseline"]
+    adapt = res["adaptive"]
+
+    # Baseline: 100 * 0.000040425 J = 0.0040425 J
+    assert math.isclose(base["energy_crypto_joules"], 0.0040425, rel_tol=1e-5)
+    assert math.isclose(base["energy_aes_joules"], 0.0040425, rel_tol=1e-5)
+
+    # Adaptive: 45 * 0.000040425 J + 55 * 0.0000175461 J = 0.001819125 + 0.0009650355 = 0.0027841605 J
+    assert math.isclose(adapt["energy_aes_joules"], 45 * 0.000040425, rel_tol=1e-4, abs_tol=1e-6)
+    assert math.isclose(adapt["energy_sha_joules"], 55 * 0.000006765, rel_tol=1e-4, abs_tol=1e-6)
+    assert math.isclose(adapt["energy_xor_joules"], 55 * 0.0000002475, rel_tol=1e-4, abs_tol=1e-6)
+    assert math.isclose(adapt["energy_hmac_joules"], 55 * 0.0000105336, rel_tol=1e-4, abs_tol=1e-6)
+    assert math.isclose(adapt["energy_crypto_joules"], 0.0027841605, rel_tol=1e-4, abs_tol=1e-6)
+
+    # Batch crypto energy saving: (4.0425 - 2.7841605) / 4.0425 = 31.1277...% ~ 31.13%
+    comp_crypto_energy = res["crypto_energy_comparison"]
+    assert math.isclose(comp_crypto_energy["energy_saving_percent"], 31.13, abs_tol=0.05)
+
+
+def test_energy_model_api_consistency(client):
+    """Verify that the /api/battery/energy-model API response has consistent active parameters
+    and reference breakdown matching the backend source of truth.
+    """
+    resp = client.get("/api/battery/energy-model")
+    assert resp.status_code == 200
+    data = resp.json()
+
+    params = data["active_parameters"]
+    assert params["supply_voltage_v"] == 3.3
+    assert params["mcu_clock_hz"] == 16_000_000.0
+    assert params["aes_active_current_ma"] == 9.8
+    assert params["sha256_active_current_ma"] == 8.2
+    assert params["xor_active_current_ma"] == 7.5
+    assert params["hmac_active_current_ma"] == 8.4
+    assert params["cpu_active_current_ma"] == 8.5
+    assert params["t_aes_gcm_ms"] == 1.25
+    assert params["t_sha256_keystream_ms"] == 0.25
+    assert params["t_xor_stream_ms"] == 0.01
+    assert params["t_hmac_sha256_ms"] == 0.38
+    assert params["t_shared_proc_ms"] == 0.35
+
+    ref = data["reference_100_record_breakdown"]
+    assert ref["record_count"] == 100
+    assert ref["high_sensitivity_count"] == 45
+    assert ref["low_sensitivity_count"] == 55
+    assert math.isclose(ref["baseline"]["energy_crypto_joules"], 0.0040425, rel_tol=1e-5)
+    assert math.isclose(ref["adaptive"]["energy_crypto_joules"], 0.0027841605, rel_tol=1e-5)
+
+
+def test_documented_reference_discrepancy_detection():
+    """Verify that documented reference values match the active configuration.
+    If any parameter in McuHardwareScenarioConfig is changed, this test ensures that
+    the documented reference constants and derivations remain synchronized.
+    """
+    cfg = McuHardwareScenarioConfig()
+
+    EXPECTED_DOCUMENTED_PARAMS = {
+        "supply_voltage_v": 3.3,
+        "mcu_clock_hz": 16_000_000.0,
+        "t_aes_gcm_ms": 1.25,
+        "t_sha256_keystream_ms": 0.25,
+        "t_xor_stream_ms": 0.01,
+        "t_hmac_sha256_ms": 0.38,
+        "t_shared_proc_ms": 0.35,
+        "aes_active_current_ma": 9.8,
+        "sha256_active_current_ma": 8.2,
+        "xor_active_current_ma": 7.5,
+        "hmac_active_current_ma": 8.4,
+        "cpu_active_current_ma": 8.5,
+        "idle_sleep_current_ma": 0.015,
+    }
+
+    discrepancies = []
+    for param, expected_val in EXPECTED_DOCUMENTED_PARAMS.items():
+        actual_val = getattr(cfg, param, None)
+        if actual_val is None or not math.isclose(actual_val, expected_val, rel_tol=1e-5):
+            discrepancies.append(
+                f"Discrepancy in {param}: active config={actual_val}, documented reference={expected_val}"
+            )
+
+    assert not discrepancies, f"Found configuration discrepancies with documented references: {discrepancies}"
+
+
+

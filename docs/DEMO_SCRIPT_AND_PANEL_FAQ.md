@@ -33,11 +33,11 @@
 ### Step 5: Battery Lab & Sub-Panel G Evidence Audit (45 Seconds)
 * **Action in UI:** Navigate to Tab 2 (*Comparison & Battery Lab*). Switch scenario to **Constrained IoT Microcontroller (Simulated Target MCU)**. Select **Compute-Intensive / Short-TX** preset. Scroll down to **Sub-Panel G**.
 * **Presenter shows result:**
-  > "In an IoT microcontroller lacking AES-NI (e.g. ARM Cortex-M0+ @ 16 MHz), software AES takes 20,000 cycles (1.25 ms), while the composite SHA-256 + XOR + HMAC routine takes 10,240 cycles (0.64 ms)—a 48.8% reduction in cryptographic CPU cycles.
+  > "In an IoT microcontroller lacking AES-NI (e.g. ARM Cortex-M0+ @ 16 MHz), software AES takes 20,000 cycles (1.25 ms at 9.8 mA, 0.0404 mJ), while the composite SHA-256 + XOR + HMAC routine takes 10,240 cycles (0.64 ms at 8.31 mA avg, 0.0175 mJ)—a 48.8% reduction in cryptographic CPU cycles and a 56.6% reduction in per-operation cryptographic energy on routine records.
   > Under **Sub-Panel G**, we provide our 3-tier evidence hierarchy and authoritative battery math:
   > - A 1200 mAh 1S Li-Po cell (3.7V nominal, 15,984 J total, 13,586.40 J usable) delivers **12,117.60 Joules** to the 3.3V regulated MCU rail at ~89.2% linear LDO efficiency.
   > - Energy is calculated strictly over **non-overlapping, mutually exclusive activity intervals**: $3.3\,\text{V} \times 10\,\text{mA} \times 1\,\text{ms} = 0.033\,\text{mJ}$.
-  > - With short radio airtime (0.5 ms), adaptive encryption predicts **~12.9% batch energy savings**."
+  > - At the batch level (where radio airtime, sensor preprocessing, and sleep are included), adaptive encryption predicts **~12.91% batch energy savings** for short transmissions (0.5 ms) and **~6.63% savings** for standard IoT radios (1.5 ms)."
 
 ### Step 6: Security Verification & Conclusion (30 Seconds)
 * **Action in UI:** Navigate to Tab 1, scroll to **Interactive Tamper Rejection Verification**, select `AES-256-GCM`, Mutation Target `Ciphertext`, and click **Execute Tamper Test**.
@@ -79,7 +79,8 @@
 > In ClusterGuard, the XOR route is implemented strictly as an **algorithmic lower-bound baseline** to evaluate the theoretical computational savings proposed in academic literature. The attached HMAC-SHA-256 provides message authentication only. Production devices must utilize authenticated AEAD ciphers (e.g., AES-256-GCM or ChaCha20-Poly1305).
 
 ### Q7: Why did your desktop test show that AES-256-GCM was faster than the lightweight route?
-> **Answer:** Modern x86-64 desktop processors include **Intel/AMD AES-NI** hardware instructions. Python's `cryptography` library uses OpenSSL, which executes AES in dedicated silicon cycles. In contrast, the experimental XOR cipher is implemented in pure Python bytecode with HMAC-SHA-256 integrity verification, incurring interpreter loop overhead. On constrained edge microcontrollers lacking AES-NI hardware (such as ARM Cortex-M0+), software AES requires 20,000 clock cycles (1.25 ms), while the composite SHA+XOR+HMAC routine requires 10,240 clock cycles (0.64 ms).
+> **Answer:** Modern x86-64 desktop processors include **Intel/AMD AES-NI** hardware instructions. Python's `cryptography` library uses OpenSSL, which executes AES in dedicated silicon cycles. In contrast, the experimental XOR cipher is implemented in pure Python bytecode with HMAC-SHA-256 integrity verification, incurring interpreter loop overhead.
+> On constrained edge microcontrollers lacking AES-NI hardware (such as ARM Cortex-M0+ @ 16 MHz, 3.3V), software AES-256 requires 20,000 clock cycles (1.25 ms at 9.8 mA = 0.040425 mJ), while the composite SHA+XOR+HMAC routine requires 10,240 clock cycles (0.64 ms at 8.31 mA avg = 0.0175461 mJ)—yielding a 48.8% CPU cycle saving and a 56.6% per-operation cryptographic energy saving for routine telemetry.
 
 ### Q8: Did you physically measure battery savings?
 > **Answer:** We do not claim verified physical battery savings on this workstation. The UI explicitly displays the badge `SIMULATED / ESTIMATED — NOT A PHYSICAL BATTERY READING`.

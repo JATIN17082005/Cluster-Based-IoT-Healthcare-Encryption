@@ -1796,7 +1796,7 @@ document.addEventListener("DOMContentLoaded", () => {
       if (scenarioDisclaimerBody) {
         scenarioDisclaimerBody.textContent = isShortTx
           ? "Configurable hypothetical model for high-throughput short airtime radios (e.g., BLE 2Mbps / packed telemetry @ 0.5 ms TX airtime). Valid only for workloads and radio settings that support 0.5 ms airtime. Does not represent measured hardware."
-          : "Evaluation platform: Simulated ARM Cortex-M0+ / 8-bit AVR edge microcontroller (16 MHz, 3.3V) without cryptographic hardware acceleration. Software AES-256-GCM takes ~20,000 cycles (~1.25 ms), while the lightweight XOR stream route takes ~10,000 cycles (~0.64 ms). Standard IoT radio scenario (1.5 ms TX airtime). This scenario is illustrative until validated against empirical target-board measurements.";
+          : "Evaluation platform: Simulated ARM Cortex-M0+ / 8-bit AVR edge microcontroller (16 MHz, 3.3V) without cryptographic hardware acceleration. Software AES-256-GCM takes ~20,000 cycles (~1.25 ms), while the composite lightweight stream route takes 10,240 cycles (~0.64 ms). Standard IoT radio scenario (1.5 ms TX airtime). This scenario is illustrative until validated against empirical target-board measurements.";
       }
       if (scenarioDisclaimerBanner) {
         scenarioDisclaimerBanner.style.background = "rgba(14,165,233,0.08)";

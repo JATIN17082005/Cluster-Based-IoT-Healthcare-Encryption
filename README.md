@@ -2,7 +2,7 @@
 
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/Backend-FastAPI-009688.svg)](https://fastapi.tiangolo.com/)
-[![Tests](https://img.shields.io/badge/Tests-83%2F83%20Passing-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/Tests-88%2F88%20Passing-brightgreen.svg)]()
 [![scikit-learn](https://img.shields.io/badge/ML-scikit--learn%20K--Means-orange.svg)](https://scikit-learn.org/)
 [![License](https://img.shields.io/badge/License-Academic%20Research-lightgrey.svg)]()
 
@@ -38,7 +38,7 @@ Continuous wearable health monitors (e.g., electrocardiograms, pulse oximeters, 
 
 ### Key Scientific Findings & Academic Honesty
 1. **On Host Workstations (x86-64 Desktop):** The adaptive route produces a **computational regression (+125% to +336% latency increase)** because modern desktop CPUs feature **silicon-level AES-NI acceleration** via OpenSSL in native C, whereas the experimental XOR/HMAC cipher runs in interpreted Python bytecode. The dashboard honestly reports `STATUS: REGRESSION` and clearly states that desktop software models do not represent bare-metal silicon.
-2. **On Target Edge Microcontrollers (Simulated ARM Cortex-M0+ / ATmega):** Where hardware AES-NI instructions are absent, software-only AES-256 requires ~20,000 CPU clock cycles (~1.25 ms), while the lightweight XOR route requires ~10,000 cycles (~0.64 ms). Depending on radio airtime, the model predicts **~12.9% batch energy savings** for short-transmission radios and **~6.6% savings** for standard IoT radios where transmission power dominates.
+2. **On Target Edge Microcontrollers (Simulated ARM Cortex-M0+ / ATmega):** Where hardware AES-NI instructions are absent, software-only AES-256 requires 20,000 CPU clock cycles (1.25 ms at 9.8 mA, 0.040425 mJ), while the composite lightweight stream route (SHA-256 + XOR + HMAC) requires 10,240 cycles (0.64 ms at 8.31 mA avg, 0.0175461 mJ)—delivering a 48.80% reduction in CPU cycles and a 56.60% reduction in per-operation cryptographic energy for routine records. At the whole-batch level (where shared sensor processing, radio transmission, and sleep intervals are factored in), the model predicts **~12.91% batch energy savings** for short-transmission radios and **~6.63% savings** for standard IoT radios where transmission power dominates.
 3. **Three-Tier Evidence Separation:** All energy figures strictly distinguish **Host Desktop Measured Benchmarks** (`DESKTOP_MEASURED_HOST`), **Modeled Target MCU Estimates** (`MODELED_ESTIMATED_MCU`), and **Physical Instrument CSV Imports** (`INSTRUMENT_MEASURED_LAB`). No artificial savings are claimed on desktop hardware.
 4. **Clinical Safety Guardrail:** Unsupervised ML clustering is never permitted to unilaterally downgrade critical telemetry. Even if K-Means assigns an abnormal record to a routine cluster, the system automatically overrides the assignment to enforce AES-256-GCM.
 
@@ -292,23 +292,31 @@ $$\text{Total Batch Energy: } E_{\text{total}} = \sum_{k} E_k = V_{\text{cc}} \s
 - **Mutual Exclusivity:** The CPU executes preprocessing, then cryptographic transformation, then activates the radio transceiver, and finally enters deep sleep. Energy intervals are never stacked or double-counted.
 
 ### Hardware Operating Parameters & CPU Cycle Accounting at 16 MHz
-At $16\,\text{MHz}$ clock frequency, $1\,\text{ms} = 16,000$ clock cycles. The model accounts for all operations without coprocessor acceleration:
+At $16\,\text{MHz}$ clock frequency, $1\,\text{ms} = 16,000$ clock cycles. The active MCU model (`McuHardwareScenarioConfig`) accounts for all operations without coprocessor acceleration at a $3.3\,\text{V}$ rail:
 
 | Operating State | Current ($I_k$) | Duration ($t_k$) | Clock Cycles @ 16 MHz | Energy per Unit ($E_k$) |
 |---|---|---|---|---|
-| Sensor Preprocessing ($t_{\text{proc}}$) | $8.0\,\text{mA}$ | $0.35\,\text{ms}$ | 5,600 cycles | $0.00924\,\text{mJ}$ |
-| Baseline Software AES-256 | $12.5\,\text{mA}$ | $1.25\,\text{ms}$ | 20,000 cycles | $0.05156\,\text{mJ}$ |
-| SHA-256 Keystream Expansion | $10.5\,\text{mA}$ | $0.40\,\text{ms}$ | 6,400 cycles | $0.01386\,\text{mJ}$ |
-| Bitwise XOR Cipher | $7.5\,\text{mA}$ | $0.09\,\text{ms}$ | 1,440 cycles | $0.00223\,\text{mJ}$ |
-| HMAC-SHA-256 Tag | $10.5\,\text{mA}$ | $0.15\,\text{ms}$ | 2,400 cycles | $0.00520\,\text{mJ}$ |
-| **Composite Routine Path (SHA+XOR+HMAC)** | **$9.61\,\text{mA}$ avg** | **$0.64\,\text{ms}$** | **10,240 cycles** | **$0.02129\,\text{mJ}$** |
+| Sensor Preprocessing ($t_{\text{proc}}$) | $8.5\,\text{mA}$ | $0.35\,\text{ms}$ | 5,600 cycles | $0.0098175\,\text{mJ}$ |
+| Baseline Software AES-256 | $9.8\,\text{mA}$ | $1.25\,\text{ms}$ | 20,000 cycles | $0.040425\,\text{mJ}$ |
+| SHA-256 Keystream Expansion | $8.2\,\text{mA}$ | $0.25\,\text{ms}$ | 4,000 cycles | $0.006765\,\text{mJ}$ |
+| Bitwise XOR Cipher | $7.5\,\text{mA}$ | $0.01\,\text{ms}$ | 160 cycles | $0.0002475\,\text{mJ}$ |
+| HMAC-SHA-256 Tag | $8.4\,\text{mA}$ | $0.38\,\text{ms}$ | 6,080 cycles | $0.0105336\,\text{mJ}$ |
+| **Composite Routine Path (SHA+XOR+HMAC)** | **$8.31\,\text{mA}$ avg** | **$0.64\,\text{ms}$** | **10,240 cycles** | **$0.0175461\,\text{mJ}$** |
 | Radio Transmit (Short TX) | $28.0\,\text{mA}$ | $0.50\,\text{ms}$ | N/A (Transceiver) | $0.046200\,\text{mJ}$ |
 | Radio Transmit (Radio Heavy) | $28.0\,\text{mA}$ | $1.50\,\text{ms}$ | N/A (Transceiver) | $0.138600\,\text{mJ}$ |
 | Deep Sleep State | $15.0\,\mu\text{A}$ | $t_{\text{idle}}$ | N/A (Sleep) | $0.0495\,\mu\text{W} \times t_{\text{idle}}$ |
 
-#### Named Target MCU Evaluation Scenarios
-- **Compute-Intensive / Short-TX ($t_{\text{tx}} = 0.50\,\text{ms}$):** Representative of BLE 2 Mbps physical layer. Cryptographic execution accounts for 44% of the energy budget; adaptive routing saves **~12.91%** batch energy.
-- **Radio-Heavy MCU Model ($t_{\text{tx}} = 1.50\,\text{ms}$):** Representative of IEEE 802.15.4 / low-baud transmissions. Radio transmission dominates 73% of energy; adaptive routing saves **~6.63%** batch energy.
+#### Per-Operation Cryptographic Energy vs. Whole-Batch Energy Savings
+- **Per-Operation Cryptographic Saving ($56.60\%$):** Moving routine packets from software AES ($0.040425\,\text{mJ}$) to the composite SHA+XOR+HMAC route ($0.0175461\,\text{mJ}$) yields an isolated **$56.60\%$ cryptographic energy reduction** ($48.80\%$ reduction in cryptographic CPU cycles).
+- **Batch Cryptographic Saving ($31.13\%$):** In a standard 100-record workload (45 High / 55 Routine), batch cryptographic energy drops from $4.043\,\text{mJ}$ to $2.784\,\text{mJ}$ (**$-31.13\%$**).
+- **Whole-Batch Total Device Energy Savings ($6.63\%$ to $12.91\%$):** When radio airtime, sensor preprocessing, and idle sleep are incorporated across the batch:
+  - **Compute-Intensive / Short-TX ($t_{\text{tx}} = 0.50\,\text{ms}$):** Cryptographic execution accounts for 44% of the energy budget; adaptive routing saves **~12.91%** batch energy.
+  - **Radio-Heavy MCU Model ($t_{\text{tx}} = 1.50\,\text{ms}$):** Representative of IEEE 802.15.4 / low-baud transmissions. Radio transmission dominates 73% of energy; adaptive routing saves **~6.63%** batch energy.
+- **Academic Distinction:** Per-operation cryptographic savings ($56.60\%$) apply only to routine encryption calculations and must not be conflated with whole-device battery life extension.
+
+> [!NOTE]
+> **Configuration Separation:**
+> Note that `PowerModelConfig` (active $35.0\,\text{mA}$, AES $54.0\,\text{mA}$, XOR $22.0\,\text{mA}$, TX $85.0\,\text{mA}$) models a higher-frequency $64\,\text{MHz}$ wireless SoC for desktop simulation, whereas `McuHardwareScenarioConfig` models the bare-metal $16\,\text{MHz}$ low-power MCU described above.
 
 ### Visual Presentation Scale Independence
 The Battery Lab includes a configurable visual presentation scale ($80\%$ high contrast, $50\%$, $20\%$, $1\times$) designed for rapid faculty demonstration. The visual percentage drained is computed proportionally:
