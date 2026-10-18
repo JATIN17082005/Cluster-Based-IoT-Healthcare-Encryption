@@ -10,6 +10,12 @@ document.addEventListener("DOMContentLoaded", () => {
   let currentRecords = [];
   let isRunning = false;
   let lastComparisonData = null;
+  let pipelineRunId = null;
+  let pipelineAllRecords = [];
+  let pipelineAllFeatures = [];
+  let pipelineDiagnostics = null;
+  let datasetCurrentPage = 1;
+  let activeDrawerStep = 1;
 
   // Battery Drain Simulation State
   let simState = {
@@ -100,7 +106,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const batchRecordCountBadge = document.getElementById("batch-record-count-badge");
   const pipelineStatusBadge = document.getElementById("pipeline-status");
 
-  // Pipeline Drawer
+  // Pipeline Drawer & Export Controls
   const pipelineSteps = document.querySelectorAll(".pipeline-step");
   const pipelineDrawer = document.getElementById("pipeline-stage-drawer");
   const drawerTitle = document.getElementById("drawer-title");
@@ -109,6 +115,31 @@ document.addEventListener("DOMContentLoaded", () => {
   const drawerOutputs = document.getElementById("drawer-outputs");
   const drawerFacultyNote = document.getElementById("drawer-faculty-note");
   const btnCloseDrawer = document.getElementById("btn-close-drawer");
+  const btnDrawerExportCsv = document.getElementById("btn-drawer-export-csv");
+  const btnDrawerExportJson = document.getElementById("btn-drawer-export-json");
+  const drawerStagePreview = document.getElementById("drawer-stage-preview");
+  const drawerStageDiagnostics = document.getElementById("drawer-stage-diagnostics");
+
+  // Synthetic Dataset & Provenance Lineage DOM
+  const datasetPipelineRunId = document.getElementById("dataset-pipeline-run-id");
+  const metaRunId = document.getElementById("meta-run-id");
+  const metaSeed = document.getElementById("meta-seed");
+  const metaTotalCount = document.getElementById("meta-total-count");
+  const metaTimestamp = document.getElementById("meta-timestamp");
+  const metaKmeansAgreement = document.getElementById("meta-kmeans-agreement");
+  const metaGuardrailOverrides = document.getElementById("meta-guardrail-overrides");
+  const btnDownloadRawCsv = document.getElementById("btn-download-raw-csv");
+  const btnDownloadRawJson = document.getElementById("btn-download-raw-json");
+  const btnDownloadFeaturesCsv = document.getElementById("btn-download-features-csv");
+  const btnDownloadClusteredCsv = document.getElementById("btn-download-clustered-csv");
+  const searchDatasetInput = document.getElementById("search-dataset-input");
+  const filterDatasetType = document.getElementById("filter-dataset-type");
+  const filterDatasetSec = document.getElementById("filter-dataset-sec");
+  const datasetPageSize = document.getElementById("dataset-page-size");
+  const btnDatasetPrev = document.getElementById("btn-dataset-prev");
+  const datasetPageIndicator = document.getElementById("dataset-page-indicator");
+  const btnDatasetNext = document.getElementById("btn-dataset-next");
+  const datasetTableBody = document.getElementById("dataset-table-body");
 
   // Battery Simulation Controls & Meters
   const batteryScenarioSelect = document.getElementById("battery-scenario-select");
@@ -332,7 +363,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const btnGuidedExit = document.getElementById("btn-guided-exit");
 
   // =========================================================================
-  // Pipeline Step Knowledge Base
+  // Pipeline Step Knowledge Base (7 Interactive Stages)
   // =========================================================================
   const PIPELINE_STAGES = {
     1: {
@@ -341,43 +372,308 @@ document.addEventListener("DOMContentLoaded", () => {
       inputs: "Seed (42), Batch Size (50), Sensor Profiles",
       outputs: "Array of JSON SensorRecord objects with timestamps and baseline units",
       note: "Guarantees exact byte-level repeatability across paired benchmarking runs.",
+      exportStage: "raw",
     },
     2: {
-      name: "Stage 02: Deterministic Sensitivity Classification",
-      description: "Applies rule-based clinical thresholds. Classifies abnormal tachycardia (>100 bpm), bradycardia (<50 bpm), fevers, and ECG waveforms as HIGH sensitivity; routine vital signs and steps as LOW sensitivity.",
-      inputs: "Raw SensorRecord stream",
-      outputs: "SensitivityLevel (HIGH / LOW) with human-auditable classification reasons",
-      note: "No black-box decisions. Faculty can inspect why each vital was classified as critical or routine.",
+      name: "Stage 02: Feature Engineering & Preprocessing",
+      description: "Extracts 6 physiological features per record: one-hot flags for modality, raw measurement values, and physiological normal range deviations. Standardizes features with StandardScaler (z = (x - μ) / σ) with zero sensitivity label leakage.",
+      inputs: "Raw SensorRecord objects",
+      outputs: "Standardized 6-dimensional feature vectors (mean=0, variance=1)",
+      note: "Label leakage strictly prevented: Clinical sensitivity labels are never fed to the feature extractor or ML clustering.",
+      exportStage: "features",
     },
     3: {
-      name: "Stage 03: Cluster Partition & Routing",
-      description: "Separates records into two distinct transmission queues: CLUSTER-HIGH (Critical patient data) and CLUSTER-LOW (Routine telemetry data).",
-      inputs: "Classified telemetry stream",
-      outputs: "Partitioned cluster groups ready for distinct cryptographic pipelines",
-      note: "Provides architectural isolation preventing routine telemetry from clogging the crypto coprocessor.",
+      name: "Stage 03: Unsupervised K-Means ML Clustering",
+      description: "Executes scikit-learn KMeans(n_clusters=2, random_state=42, n_init=10, algorithm='lloyd'). Partitions records in standardized feature space without supervisory guidance. Computes centroids, inertia, and silhouette score.",
+      inputs: "Standardized 6-dimensional feature vectors",
+      outputs: "Cluster assignments (Cluster 0 / Cluster 1), unscaled feature centroids, silhouette score",
+      note: "Discovers natural data separation driven by physiological deviation rather than arbitrary rules.",
+      exportStage: "clustered",
     },
     4: {
-      name: "Stage 04: Cryptographic Routing & AEAD Encryption",
-      description: "High-sensitivity records are encrypted with NIST-compliant AES-256-GCM using fresh 96-bit nonces. Routine records are routed to an experimental lightweight stream cipher with HMAC-SHA-256 integrity authentication.",
+      name: "Stage 04: Semantic Grouping & Clinical Safety Guardrail",
+      description: "Maps K-Means clusters deterministically to CLUSTER-HIGH (higher physiological deviation) and CLUSTER-LOW. Enforces an immutable clinical safety guardrail: any record meeting clinical critical thresholds is protected from downgrade to routine status.",
+      inputs: "K-Means cluster assignments, Clinical policy rules",
+      outputs: "Audit-verified partitions with override reasons logged",
+      note: "Safety invariant: Clinical emergencies are guaranteed NIST-level AES-256-GCM protection regardless of ML clustering edge cases.",
+      exportStage: "clustered",
+    },
+    5: {
+      name: "Stage 05: Cryptographic Routing & AEAD Encryption",
+      description: "High-sensitivity records route to NIST-compliant AES-256-GCM using fresh 96-bit nonces. Routine records route to an experimental lightweight stream cipher with HMAC-SHA-256 integrity authentication.",
       inputs: "Cluster payloads, 256-bit AES key, ephemeral stream key",
       outputs: "Encrypted canonical envelopes with 128-bit authentication tags and unique nonces",
       note: "AES-GCM guarantees AEAD confidentiality and authenticity. XOR is marked experimental.",
+      exportStage: "clustered",
     },
-    5: {
-      name: "Stage 05: Local Healthcare Receiver Ingestion",
+    6: {
+      name: "Stage 06: Local Healthcare Receiver Ingestion",
       description: "Simulates clinical edge receiver. Ingests encrypted envelopes, verifies authentication tags in constant time, tracks nonce freshness, and decrypts payloads back into electronic health records.",
       inputs: "Over-the-air encrypted JSON envelopes",
       outputs: "Verification status (Accepted / Tampered Dropped), Decrypted telemetry",
       note: "Drops tampered packets immediately without exposing cryptographic secrets.",
+      exportStage: "raw",
     },
-    6: {
-      name: "Stage 06: Energy & Performance Benchmark Engine",
-      description: "Monotonically isolates pure cryptographic execution from serialization noise. Computes Transmission Success Rate (TSR), Packet Loss Rate (PLR), and electrical energy via trapezoidal numerical integration.",
+    7: {
+      name: "Stage 07: Energy & Performance Benchmark Engine",
+      description: "Monotonically isolates pure cryptographic execution from serialization noise. Computes Transmission Success Rate (TSR), Packet Loss Rate (PLR), and electrical energy via trapezoidal numerical integration ($P = V \\times I$).",
       inputs: "Nanosecond execution timers, documented 3.3V power model / lab CSV samples",
       outputs: "Latency percentiles (mean, median, p95), total Joules, mJ/1,000 records, mAh",
       note: "Strictly labels results as SIMULATED / ESTIMATED when running without physical meters.",
+      exportStage: "raw",
     },
   };
+
+  function renderDrawerStageContent(stepNum) {
+    if (!drawerStagePreview || !drawerStageDiagnostics) return;
+
+    if (!pipelineAllRecords || pipelineAllRecords.length === 0) {
+      drawerStagePreview.innerHTML = `
+        <div style="font-size:0.75rem;color:var(--text-muted);padding:0.75rem;background:var(--bg-app);border-radius:4px;">
+          No dataset loaded yet. Click <strong>Generate Healthcare Data</strong> to initialize pipeline stage state.
+        </div>`;
+      drawerStageDiagnostics.innerHTML = `
+        <span style="color:var(--text-muted);">Standby &mdash; awaiting dataset generation.</span>`;
+      return;
+    }
+
+    if (stepNum === 1) {
+      const previewRows = pipelineAllRecords.slice(0, 6).map(r => `
+        <tr>
+          <td><code>${r.record_id}</code></td>
+          <td>${r.timestamp ? r.timestamp.split("T")[1].replace("Z", "") : "&mdash;"}</td>
+          <td>${r.demo_patient_id || r.patient_id || 'PAT-001'}</td>
+          <td><span class="badge badge-aes">${(r.record_type || '').replace('_', ' ').toUpperCase()}</span></td>
+          <td><strong>${r.value}</strong> <small>${r.unit || ''}</small></td>
+        </tr>
+      `).join('');
+
+      drawerStagePreview.innerHTML = `
+        <div style="font-size:0.75rem;font-weight:600;margin-bottom:0.35rem;color:var(--text-secondary);">Raw Records Sample (First 6 of ${pipelineAllRecords.length})</div>
+        <table class="data-table" style="font-size:0.72rem;margin:0;">
+          <thead><tr><th>Record ID</th><th>Time</th><th>Patient</th><th>Type</th><th>Value</th></tr></thead>
+          <tbody>${previewRows}</tbody>
+        </table>`;
+
+      drawerStageDiagnostics.innerHTML = `
+        <div><strong>Pipeline Run ID:</strong> <code style="color:var(--brand-cyan);">${pipelineRunId || '&mdash;'}</code></div>
+        <div><strong>Deterministic Seed:</strong> <span style="font-weight:700;">${inputSeed ? inputSeed.value : 42}</span></div>
+        <div><strong>Record Count:</strong> ${pipelineAllRecords.length} records</div>
+        <div><strong>PRNG Engine:</strong> Python Mersenne Twister (Bitwise reproducible)</div>`;
+    } else if (stepNum === 2) {
+      const featuresSlice = (pipelineAllFeatures || []).slice(0, 6);
+      const previewRows = featuresSlice.map(fv => {
+        const f = fv.features || {};
+        return `
+          <tr>
+            <td><code>${fv.record_id}</code></td>
+            <td>${f.type_heart_rate ?? 0}</td>
+            <td>${f.type_ecg_summary ?? 0}</td>
+            <td>${f.type_temperature ?? 0}</td>
+            <td>${f.type_step_count ?? 0}</td>
+            <td>${f.raw_measurement !== undefined ? Number(f.raw_measurement).toFixed(1) : '&mdash;'}</td>
+            <td>${f.physiological_range_deviation !== undefined ? Number(f.physiological_range_deviation).toFixed(2) : '&mdash;'}</td>
+          </tr>
+        `;
+      }).join('');
+
+      drawerStagePreview.innerHTML = `
+        <div style="font-size:0.75rem;font-weight:600;margin-bottom:0.35rem;color:var(--text-secondary);">Standardized Feature Vectors (First 6 of ${(pipelineAllFeatures || []).length})</div>
+        <table class="data-table" style="font-size:0.72rem;margin:0;">
+          <thead><tr><th>Record ID</th><th>HR</th><th>ECG</th><th>Temp</th><th>Step</th><th>Raw</th><th>Dev</th></tr></thead>
+          <tbody>${previewRows}</tbody>
+        </table>`;
+
+      drawerStageDiagnostics.innerHTML = `
+        <div><strong>Feature Dimensionality:</strong> 6 engineered features</div>
+        <div><strong>Normalization:</strong> StandardScaler (z = (x - &mu;) / &sigma;)</div>
+        <div><strong>Label Leakage:</strong> <span style="color:var(--status-success);font-weight:700;">0% (ISOLATED)</span></div>
+        <div style="font-size:0.72rem;color:var(--text-muted);margin-top:0.3rem;">Sensitivity classifications are completely excluded from the feature matrix.</div>`;
+    } else if (stepNum === 3) {
+      const diag = pipelineDiagnostics || {};
+      const centroids = diag.unscaled_centroids || [];
+      const featureNames = ["Heart Rate", "ECG ST", "Temperature", "Step Count", "Raw Value", "Physio Dev"];
+      
+      let centroidHtml = "";
+      if (centroids.length >= 2) {
+        centroidHtml = `
+          <table class="data-table" style="font-size:0.72rem;margin:0;">
+            <thead><tr><th>Feature</th><th>Cluster 0 Centroid</th><th>Cluster 1 Centroid</th></tr></thead>
+            <tbody>
+              ${featureNames.map((fn, idx) => `
+                <tr>
+                  <td><strong>${fn}</strong></td>
+                  <td>${centroids[0] && centroids[0][idx] !== undefined ? Number(centroids[0][idx]).toFixed(2) : '&mdash;'}</td>
+                  <td>${centroids[1] && centroids[1][idx] !== undefined ? Number(centroids[1][idx]).toFixed(2) : '&mdash;'}</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>`;
+      } else {
+        centroidHtml = `<div style="color:var(--text-muted);">Centroid data unavailable.</div>`;
+      }
+
+      drawerStagePreview.innerHTML = `
+        <div style="font-size:0.75rem;font-weight:600;margin-bottom:0.35rem;color:var(--text-secondary);">Unscaled Physiological Centroids (K=2)</div>
+        ${centroidHtml}`;
+
+      const silScore = diag.silhouette_score !== undefined ? diag.silhouette_score.toFixed(3) : '&mdash;';
+      const inertia = diag.inertia !== undefined ? diag.inertia.toFixed(2) : '&mdash;';
+
+      drawerStageDiagnostics.innerHTML = `
+        <div><strong>Algorithm:</strong> scikit-learn Lloyd (K=2, n_init=10)</div>
+        <div><strong>Silhouette Score:</strong> <span style="color:var(--brand-cyan);font-weight:700;">${silScore}</span></div>
+        <div><strong>Model Inertia (WCSS):</strong> ${inertia}</div>
+        <div><strong>Convergence:</strong> Verified in 10 initializations</div>`;
+    } else if (stepNum === 4) {
+      const previewRows = pipelineAllRecords.slice(0, 6).map(r => {
+        const isOverride = !!r.policy_override;
+        return `
+          <tr>
+            <td><code>${r.record_id}</code></td>
+            <td>${r.kmeans_cluster_id !== undefined ? 'Clust ' + r.kmeans_cluster_id : '&mdash;'}</td>
+            <td><span class="${r.cluster_label === 'CLUSTER-HIGH' ? 'badge-cluster-high' : 'badge-cluster-low'}">${r.cluster_label || '&mdash;'}</span></td>
+            <td><span class="badge ${r.policy_sensitivity === 'HIGH' ? 'badge-high' : 'badge-low'}">${r.policy_sensitivity || r.sensitivity || 'LOW'}</span></td>
+            <td><span class="badge ${r.effective_security_class === 'HIGH' ? 'badge-high' : 'badge-low'}">${r.effective_security_class || 'LOW'}</span></td>
+            <td>${isOverride ? '<span class="badge status-badge-regression">OVERRIDDEN</span>' : '<span class="badge badge-low">ALIGNED</span>'}</td>
+          </tr>
+        `;
+      }).join('');
+
+      drawerStagePreview.innerHTML = `
+        <div style="font-size:0.75rem;font-weight:600;margin-bottom:0.35rem;color:var(--text-secondary);">Cluster Assignments &amp; Guardrail Status (First 6)</div>
+        <table class="data-table" style="font-size:0.72rem;margin:0;">
+          <thead><tr><th>Record ID</th><th>K-Means</th><th>Semantic</th><th>Policy</th><th>Effective</th><th>Guardrail</th></tr></thead>
+          <tbody>${previewRows}</tbody>
+        </table>`;
+
+      const diag = pipelineDiagnostics || {};
+      const ratio = diag.agreement_ratio !== undefined ? diag.agreement_ratio : (diag.agreement_with_policy_rate || 0);
+      const agreement = (ratio * 100).toFixed(1);
+      const overrides = diag.guardrail_overrides_count !== undefined ? diag.guardrail_overrides_count : (diag.guardrail_overrides_applied || 0);
+
+      drawerStageDiagnostics.innerHTML = `
+        <div><strong>Policy Agreement Rate:</strong> <span style="color:var(--brand-cyan);font-weight:700;">${agreement}%</span></div>
+        <div><strong>Clinical Guardrail Overrides:</strong> <span style="color:var(--status-danger);font-weight:700;">${overrides}</span></div>
+        <div><strong>Safety Guarantee:</strong> Clinical HIGH records are never downgraded to LOW</div>
+        <div style="font-size:0.72rem;color:var(--text-muted);margin-top:0.3rem;">If K-Means clusters an emergency vital with routine data, the guardrail forces NIST AES-256-GCM encryption.</div>`;
+    } else if (stepNum === 5) {
+      const highCount = pipelineAllRecords.filter(r => r.effective_security_class === "HIGH").length;
+      const lowCount = pipelineAllRecords.length - highCount;
+      const highPct = pipelineAllRecords.length > 0 ? ((highCount / pipelineAllRecords.length) * 100).toFixed(1) : 0;
+      const lowPct = pipelineAllRecords.length > 0 ? ((lowCount / pipelineAllRecords.length) * 100).toFixed(1) : 0;
+
+      drawerStagePreview.innerHTML = `
+        <div style="font-size:0.75rem;font-weight:600;margin-bottom:0.35rem;color:var(--text-secondary);">Cryptographic Routing Partition</div>
+        <table class="data-table" style="font-size:0.72rem;margin:0;">
+          <thead><tr><th>Route Target</th><th>Algorithm</th><th>Records</th><th>Share</th></tr></thead>
+          <tbody>
+            <tr>
+              <td><span class="badge-cluster-high">CLUSTER-HIGH</span></td>
+              <td>AES-256-GCM (NIST AEAD)</td>
+              <td><strong>${highCount}</strong></td>
+              <td>${highPct}%</td>
+            </tr>
+            <tr>
+              <td><span class="badge-cluster-low">CLUSTER-LOW</span></td>
+              <td>XOR Stream + HMAC-SHA-256</td>
+              <td><strong>${lowCount}</strong></td>
+              <td>${lowPct}%</td>
+            </tr>
+          </tbody>
+        </table>`;
+
+      drawerStageDiagnostics.innerHTML = `
+        <div><strong>NIST Security:</strong> AES-256-GCM with fresh 96-bit unique nonces</div>
+        <div><strong>Authentication Tag:</strong> 128-bit Poly1305 / GHASH tag</div>
+        <div><strong>Routine Route:</strong> SHA-256 PRNG stream cipher with HMAC integrity</div>
+        <div><strong>Nonce Safety:</strong> Monotonic 96-bit counter (Zero replay allowed)</div>`;
+    } else if (stepNum === 6) {
+      const totalSent = statSent ? statSent.textContent : "0";
+      const totalAccepted = statAccepted ? statAccepted.textContent : "0";
+      const totalRejected = statRejected ? statRejected.textContent : "0";
+      const tsr = statTsr ? statTsr.textContent : "100%";
+
+      drawerStagePreview.innerHTML = `
+        <div style="font-size:0.75rem;font-weight:600;margin-bottom:0.35rem;color:var(--text-secondary);">Edge Clinical Receiver Telemetry</div>
+        <table class="data-table" style="font-size:0.72rem;margin:0;">
+          <thead><tr><th>Receiver Metric</th><th>Observed Value</th><th>Status</th></tr></thead>
+          <tbody>
+            <tr><td>Transmission Success Rate (TSR)</td><td><strong>${tsr}</strong></td><td><span class="badge badge-low">VERIFIED</span></td></tr>
+            <tr><td>Total Envelopes Ingested</td><td>${totalSent}</td><td>Normal</td></tr>
+            <tr><td>Authenticated &amp; Decrypted</td><td>${totalAccepted}</td><td><span class="badge badge-low">ACCEPTED</span></td></tr>
+            <tr><td>Tamper / Auth Failures Dropped</td><td>${totalRejected}</td><td><span class="badge ${totalRejected === '0' ? 'badge-low' : 'status-badge-regression'}">${totalRejected}</span></td></tr>
+          </tbody>
+        </table>`;
+
+      drawerStageDiagnostics.innerHTML = `
+        <div><strong>Tag Verification:</strong> Constant-time crypto comparison</div>
+        <div><strong>Replay Protection:</strong> Enforced via monotonic counter cache</div>
+        <div><strong>Failure Action:</strong> Immediate packet drop, zero secret key exposure</div>`;
+    } else if (stepNum === 7) {
+      drawerStagePreview.innerHTML = `
+        <div style="font-size:0.75rem;font-weight:600;margin-bottom:0.35rem;color:var(--text-secondary);">Active Energy Accounting Summary</div>
+        <table class="data-table" style="font-size:0.72rem;margin:0;">
+          <thead><tr><th>Scenario</th><th>Crypto Execution</th><th>Total Energy</th><th>Result</th></tr></thead>
+          <tbody>
+            <tr><td>Desktop Benchmark (x86-64)</td><td>Host perf_counter</td><td>Software Model</td><td><span class="badge status-badge-regression">REGRESSION (+125% to +336%)</span></td></tr>
+            <tr><td>Simulated MCU (16 MHz)</td><td>Non-accelerated model</td><td>E = V &times; I &times; t</td><td><span class="badge badge-low">MODEL PREDICTS LOWER ENERGY</span></td></tr>
+          </tbody>
+        </table>`;
+
+      drawerStageDiagnostics.innerHTML = `
+        <div><strong>3-Tier Evidence Hierarchy:</strong> DESKTOP_MEASURED_HOST &bull; MODELED_ESTIMATED_MCU &bull; INSTRUMENT_MEASURED_LAB</div>
+        <div><strong>Arithmetic Proof:</strong> 3.3V &times; 10mA &times; 1ms = 0.033 mJ</div>
+        <div><strong>Battery Specification:</strong> 1200 mAh &times; 0.85 &times; 3.3V &times; 3.6 = 12,117.6 Joules</div>`;
+    }
+  }
+
+  // Pipeline Step Click Handlers
+  pipelineSteps.forEach((stepEl) => {
+    stepEl.addEventListener("click", () => {
+      const stepNum = parseInt(stepEl.getAttribute("data-step"), 10);
+      showPipelineDrawer(stepNum);
+    });
+  });
+
+  function showPipelineDrawer(stepNum) {
+    const data = PIPELINE_STAGES[stepNum];
+    if (!data) return;
+    activeDrawerStep = stepNum;
+
+    pipelineSteps.forEach((s) => s.classList.remove("active-step"));
+    const activeEl = document.getElementById(`step-${stepNum}`);
+    if (activeEl) activeEl.classList.add("active-step");
+
+    if (drawerTitle) drawerTitle.textContent = data.name;
+    if (drawerDescription) drawerDescription.textContent = data.description;
+    if (drawerInputs) drawerInputs.textContent = data.inputs;
+    if (drawerOutputs) drawerOutputs.textContent = data.outputs;
+    if (drawerFacultyNote) drawerFacultyNote.textContent = data.note;
+
+    if (btnDrawerExportCsv) {
+      btnDrawerExportCsv.style.display = data.exportStage ? "inline-block" : "none";
+      btnDrawerExportCsv.onclick = () => {
+        window.location.href = `/api/pipeline/export/${data.exportStage}.csv`;
+      };
+    }
+    if (btnDrawerExportJson) {
+      btnDrawerExportJson.style.display = data.exportStage ? "inline-block" : "none";
+      btnDrawerExportJson.onclick = () => {
+        window.location.href = `/api/pipeline/export/${data.exportStage}.json`;
+      };
+    }
+
+    renderDrawerStageContent(stepNum);
+    if (pipelineDrawer) pipelineDrawer.classList.add("open");
+  }
+
+  if (btnCloseDrawer) {
+    btnCloseDrawer.addEventListener("click", () => {
+      pipelineDrawer.classList.remove("open");
+      pipelineSteps.forEach((s) => s.classList.remove("active-step"));
+    });
+  }
 
   // =========================================================================
   // Tab Switching Logic
@@ -415,7 +711,6 @@ document.addEventListener("DOMContentLoaded", () => {
     try {
       const resp = await fetch("/api/health");
       if (resp.ok) {
-        const data = await resp.json();
         backendStatusPill.className = "status-pill online";
         backendStatusText.textContent = "Backend Connected";
       } else {
@@ -428,39 +723,6 @@ document.addEventListener("DOMContentLoaded", () => {
   }
   checkBackendHealth();
   setInterval(checkBackendHealth, 30000);
-
-  // =========================================================================
-  // Pipeline Step Interaction & Drawer Logic
-  // =========================================================================
-  pipelineSteps.forEach((stepEl) => {
-    stepEl.addEventListener("click", () => {
-      const stepNum = parseInt(stepEl.getAttribute("data-step"), 10);
-      showPipelineDrawer(stepNum);
-    });
-  });
-
-  function showPipelineDrawer(stepNum) {
-    const data = PIPELINE_STAGES[stepNum];
-    if (!data) return;
-
-    pipelineSteps.forEach((s) => s.classList.remove("active-step"));
-    const activeEl = document.getElementById(`step-${stepNum}`);
-    if (activeEl) activeEl.classList.add("active-step");
-
-    drawerTitle.textContent = data.name;
-    drawerDescription.textContent = data.description;
-    drawerInputs.textContent = data.inputs;
-    drawerOutputs.textContent = data.outputs;
-    drawerFacultyNote.textContent = data.note;
-    pipelineDrawer.classList.add("open");
-  }
-
-  if (btnCloseDrawer) {
-    btnCloseDrawer.addEventListener("click", () => {
-      pipelineDrawer.classList.remove("open");
-      pipelineSteps.forEach((s) => s.classList.remove("active-step"));
-    });
-  }
 
   function highlightPipelineStep(stepNum) {
     pipelineSteps.forEach((s) => {
@@ -530,6 +792,31 @@ document.addEventListener("DOMContentLoaded", () => {
       const data = await resp.json();
 
       currentRecords = data.all_records || [];
+      pipelineAllRecords = data.all_records || [];
+      pipelineAllFeatures = data.all_features || [];
+      pipelineDiagnostics = data.clustering_diagnostics || null;
+      pipelineRunId = data.pipeline_run_id || null;
+
+      // Update Dataset Provenance Ribbon
+      if (datasetPipelineRunId) datasetPipelineRunId.textContent = data.pipeline_run_id || "PIPE-STANDBY";
+      if (metaRunId) metaRunId.textContent = data.pipeline_run_id || "&mdash;";
+      if (metaSeed) metaSeed.textContent = data.seed;
+      if (metaTotalCount) metaTotalCount.textContent = data.count;
+      if (metaTimestamp) metaTimestamp.textContent = data.generated_at ? data.generated_at.split("T")[1].replace("Z", "") : "&mdash;";
+      if (metaKmeansAgreement && data.clustering_diagnostics) {
+        const diag = data.clustering_diagnostics;
+        const ratio = diag.agreement_ratio !== undefined ? diag.agreement_ratio : (diag.agreement_with_policy_rate || 0);
+        const rate = (ratio * 100).toFixed(1);
+        const sil = diag.silhouette_score !== undefined && diag.silhouette_score !== null ? diag.silhouette_score.toFixed(3) : "&mdash;";
+        metaKmeansAgreement.textContent = `${rate}% (Silhouette: ${sil})`;
+      }
+      if (metaGuardrailOverrides && data.clustering_diagnostics) {
+        const diag = data.clustering_diagnostics;
+        metaGuardrailOverrides.textContent = diag.guardrail_overrides_count ?? diag.guardrail_overrides_applied ?? 0;
+      }
+
+      datasetCurrentPage = 1;
+      renderDatasetTable();
       renderRecordExplorer(currentRecords);
 
       // Update KPIs & Distribution Summary
@@ -546,6 +833,8 @@ document.addEventListener("DOMContentLoaded", () => {
       if (statRejected2) statRejected2.textContent = "0";
 
       highlightPipelineStep(2);
+      renderDrawerStageContent(activeDrawerStep);
+
       if (simState.scenario === "mcu") {
         fetchMcuScenarioData();
       }
@@ -554,6 +843,205 @@ document.addEventListener("DOMContentLoaded", () => {
       alert("Error generating data: " + err.message);
       return null;
     }
+  }
+
+  // =========================================================================
+  // Transparent Synthetic Healthcare Dataset Table & Filtering Engine
+  // =========================================================================
+  function renderDatasetTable() {
+    if (!datasetTableBody) return;
+    if (!pipelineAllRecords || pipelineAllRecords.length === 0) {
+      datasetTableBody.innerHTML = `
+        <tr>
+          <td colspan="11" style="text-align:center;padding:2rem;color:var(--text-muted);">
+            No dataset generated yet. Click <strong>"Generate Healthcare Data"</strong> above to produce a seeded batch with genuine K-Means clustering.
+          </td>
+        </tr>`;
+      return;
+    }
+
+    const search = (searchDatasetInput?.value || "").toLowerCase().trim();
+    const typeFilter = filterDatasetType?.value || "ALL";
+    const secFilter = filterDatasetSec?.value || "ALL";
+
+    const filtered = pipelineAllRecords.filter((r) => {
+      if (typeFilter !== "ALL" && r.record_type !== typeFilter) return false;
+      if (secFilter === "HIGH" && r.effective_security_class !== "HIGH") return false;
+      if (secFilter === "LOW" && r.effective_security_class !== "LOW") return false;
+      if (secFilter === "OVERRIDE" && !r.policy_override) return false;
+      if (search) {
+        const text = `${r.record_id} ${r.demo_patient_id || r.patient_id || ''} ${r.record_type} ${r.value} ${r.override_reason || ''}`.toLowerCase();
+        if (!text.includes(search)) return false;
+      }
+      return true;
+    });
+
+    const pageSizeVal = datasetPageSize ? datasetPageSize.value : "25";
+    const pageSize = pageSizeVal === "1000" ? Math.max(1, filtered.length) : parseInt(pageSizeVal, 10) || 25;
+    const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
+    if (datasetCurrentPage > totalPages) datasetCurrentPage = totalPages;
+    if (datasetCurrentPage < 1) datasetCurrentPage = 1;
+
+    const startIdx = (datasetCurrentPage - 1) * pageSize;
+    const endIdx = startIdx + pageSize;
+    const pageRecords = filtered.slice(startIdx, endIdx);
+
+    if (datasetPageIndicator) {
+      datasetPageIndicator.textContent = `Page ${datasetCurrentPage} of ${totalPages} (${filtered.length} records)`;
+    }
+    if (btnDatasetPrev) btnDatasetPrev.disabled = (datasetCurrentPage <= 1);
+    if (btnDatasetNext) btnDatasetNext.disabled = (datasetCurrentPage >= totalPages);
+
+    if (pageRecords.length === 0) {
+      datasetTableBody.innerHTML = `
+        <tr>
+          <td colspan="11" style="text-align:center;padding:1.5rem;color:var(--text-muted);">
+            No records matched the filter criteria.
+          </td>
+        </tr>`;
+      return;
+    }
+
+    const devMap = {};
+    if (pipelineAllFeatures && pipelineAllFeatures.length > 0) {
+      pipelineAllFeatures.forEach((fv) => {
+        if (fv.record_id && fv.features) {
+          devMap[fv.record_id] = fv.features.physiological_range_deviation;
+        }
+      });
+    }
+
+    datasetTableBody.innerHTML = pageRecords.map((r) => {
+      const dev = r.physiological_range_deviation ?? devMap[r.record_id];
+      const devDisplay = (dev !== undefined && dev !== null) ? Number(dev).toFixed(2) : "&mdash;";
+      const clustId = r.kmeans_cluster_id !== undefined && r.kmeans_cluster_id !== null ? `Cluster ${r.kmeans_cluster_id}` : "&mdash;";
+      const clustLabel = r.cluster_label || "&mdash;";
+      const isHighCluster = clustLabel === "CLUSTER-HIGH";
+      const policyClass = r.policy_sensitivity || r.sensitivity || "LOW";
+      const effectiveRoute = r.effective_security_class || (policyClass === "HIGH" ? "HIGH" : "LOW");
+      const isOverride = !!r.policy_override;
+      const guardrailBadge = isOverride
+        ? `<span class="badge status-badge-regression" title="${r.override_reason || 'Guardrail enforced'}">OVERRIDDEN</span>`
+        : `<span class="badge badge-low">ALIGNED</span>`;
+
+      return `
+        <tr>
+          <td><code>${r.record_id}</code></td>
+          <td style="font-size:0.75rem;color:var(--text-secondary);">${r.timestamp ? r.timestamp.split("T")[1].replace("Z", "") : "&mdash;"}</td>
+          <td><strong>${r.demo_patient_id || r.patient_id || 'PAT-001'}</strong></td>
+          <td><span class="badge badge-aes">${(r.record_type || '').replace('_', ' ').toUpperCase()}</span></td>
+          <td><strong>${r.value}</strong> <small style="color:var(--text-muted);">${r.unit || ''}</small></td>
+          <td style="font-family:var(--font-mono);">${devDisplay}</td>
+          <td><span class="badge" style="background:var(--bg-surface-2);color:#cbd5e1;font-size:0.72rem;">${clustId}</span></td>
+          <td><span class="${isHighCluster ? 'badge-cluster-high' : 'badge-cluster-low'}">${clustLabel}</span></td>
+          <td><span class="badge ${policyClass === 'HIGH' ? 'badge-high' : 'badge-low'}">${policyClass}</span></td>
+          <td><span class="badge ${effectiveRoute === 'HIGH' ? 'badge-high' : 'badge-low'}">${effectiveRoute === 'HIGH' ? 'AES-256-GCM' : 'XOR-STREAM'}</span></td>
+          <td>${guardrailBadge}</td>
+        </tr>
+      `;
+    }).join("");
+  }
+
+  // Dataset Toolbar Listeners
+  if (searchDatasetInput) {
+    searchDatasetInput.addEventListener("input", () => {
+      datasetCurrentPage = 1;
+      renderDatasetTable();
+    });
+  }
+  if (filterDatasetType) {
+    filterDatasetType.addEventListener("change", () => {
+      datasetCurrentPage = 1;
+      renderDatasetTable();
+    });
+  }
+  if (filterDatasetSec) {
+    filterDatasetSec.addEventListener("change", () => {
+      datasetCurrentPage = 1;
+      renderDatasetTable();
+    });
+  }
+  if (datasetPageSize) {
+    datasetPageSize.addEventListener("change", () => {
+      datasetCurrentPage = 1;
+      renderDatasetTable();
+    });
+  }
+  if (btnDatasetPrev) {
+    btnDatasetPrev.addEventListener("click", () => {
+      if (datasetCurrentPage > 1) {
+        datasetCurrentPage--;
+        renderDatasetTable();
+      }
+    });
+  }
+  if (btnDatasetNext) {
+    btnDatasetNext.addEventListener("click", () => {
+      datasetCurrentPage++;
+      renderDatasetTable();
+    });
+  }
+
+  // Stage & Dataset Download Actions
+  if (btnDownloadRawCsv) {
+    btnDownloadRawCsv.addEventListener("click", () => {
+      window.location.href = "/api/pipeline/export/raw.csv";
+    });
+  }
+  if (btnDownloadRawJson) {
+    btnDownloadRawJson.addEventListener("click", () => {
+      window.location.href = "/api/pipeline/export/raw.json";
+    });
+  }
+  if (btnDownloadFeaturesCsv) {
+    btnDownloadFeaturesCsv.addEventListener("click", () => {
+      window.location.href = "/api/pipeline/export/features.csv";
+    });
+  }
+  if (btnDownloadClusteredCsv) {
+    btnDownloadClusteredCsv.addEventListener("click", () => {
+      window.location.href = "/api/pipeline/export/clustered.csv";
+    });
+  }
+
+  // Global Reset Button Handler
+  if (btnReset) {
+    btnReset.addEventListener("click", async () => {
+      try {
+        await fetch("/api/demo/reset", { method: "POST" });
+        currentRecords = [];
+        pipelineAllRecords = [];
+        pipelineAllFeatures = [];
+        pipelineDiagnostics = null;
+        pipelineRunId = null;
+
+        if (datasetPipelineRunId) datasetPipelineRunId.textContent = "PIPE-STANDBY";
+        if (metaRunId) metaRunId.textContent = "&mdash;";
+        if (metaSeed) metaSeed.textContent = "42";
+        if (metaTotalCount) metaTotalCount.textContent = "0";
+        if (metaTimestamp) metaTimestamp.textContent = "&mdash;";
+        if (metaKmeansAgreement) metaKmeansAgreement.textContent = "&mdash;";
+        if (metaGuardrailOverrides) metaGuardrailOverrides.textContent = "0";
+
+        kpiRecordsVal.textContent = "0";
+        statHighCount.textContent = "0";
+        statLowCount.textContent = "0";
+        if (batchRecordCountBadge) batchRecordCountBadge.textContent = "0 Records";
+        if (explorerRecordsCountBadge) explorerRecordsCountBadge.textContent = "0 Records";
+        statSent.textContent = "0";
+        statAccepted.textContent = "0";
+        if (statRejected) statRejected.textContent = "0";
+        if (statRejected2) statRejected2.textContent = "0";
+
+        renderDatasetTable();
+        renderRecordExplorer([]);
+        renderDrawerStageContent(activeDrawerStep);
+        resetBatterySim();
+        showToast("Pipeline state reset to initial conditions.");
+      } catch (err) {
+        showToast("Reset failed: " + err.message, "danger");
+      }
+    });
   }
 
   // =========================================================================

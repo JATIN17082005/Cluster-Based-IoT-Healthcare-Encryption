@@ -118,7 +118,8 @@ class BenchmarkRunner:
                 if self._cancel_requested:
                     break
 
-            if record.sensitivity == SensitivityLevel.HIGH:
+            eff_sec = getattr(record, "effective_security_class", None) or record.sensitivity
+            if eff_sec == SensitivityLevel.HIGH:
                 high_sens_count += 1
             else:
                 low_sens_count += 1
@@ -127,7 +128,7 @@ class BenchmarkRunner:
             if mode == BenchmarkMode.BASELINE:
                 algorithm = EncryptionAlgorithm.AES_256_GCM
             else:
-                if record.sensitivity == SensitivityLevel.HIGH:
+                if eff_sec == SensitivityLevel.HIGH:
                     algorithm = EncryptionAlgorithm.AES_256_GCM
                 else:
                     algorithm = EncryptionAlgorithm.XOR_LIGHTWEIGHT
@@ -309,6 +310,15 @@ class BenchmarkRunner:
                 cluster_manager=self.cluster_manager,
             )
 
+        pipeline_run_id = None
+        if records and len(records) > 0:
+            pipeline_run_id = getattr(records[0], "pipeline_run_id", None)
+        if not pipeline_run_id:
+            pipeline_run_id = f"PIPE-S{seed}-{int(time.time())}"
+            for r in records:
+                if not getattr(r, "pipeline_run_id", None):
+                    r.pipeline_run_id = pipeline_run_id
+
         # 1. Warm-up runs to stabilize JIT, CPU governor, and crypto caches
         for _ in range(warmup_repetitions):
             if self._cancel_requested:
@@ -424,6 +434,7 @@ class BenchmarkRunner:
         overall_status = evaluate_result_status(mean_base_energy, mean_adapt_energy, lower_is_better=True)
 
         return {
+            "pipeline_run_id": pipeline_run_id,
             "repetitions": n_reps,
             "warmup_repetitions": warmup_repetitions,
             "record_count": record_count,

@@ -4,7 +4,9 @@ import os
 import io
 import csv
 import json
-from typing import Optional, List, Dict, Any
+import time
+from typing import Optional, List, Dict, Any, Tuple
+from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, UploadFile, File, Query, Response
@@ -23,16 +25,26 @@ from src.models import (
     PowerModelConfig,
     McuHardwareScenarioConfig,
     EncryptionAlgorithm,
+    KMeansConfig,
+    KMeansDiagnostics,
+    ClusteringResult,
+    FeatureVector,
 )
 from src.data_generator import SyntheticDataGenerator
 from src.classifier import SensitivityClassifier, get_default_ruleset
 from src.cluster_manager import ClusterManager
+from src.kmeans_clusterer import HealthcareFeatureExtractor, KMeansPipeline
 from src.crypto import KeyManager, EncryptionEngine, tamper_envelope
 from src.receiver import LocalHealthcareReceiver
 from src.benchmark_runner import BenchmarkRunner
 from src.power_measurement import CSVPowerImporter, SimulationPowerProvider, McuEnergyModel
 from src.run_store import RunStore
-from src.metrics import compute_percentage_change, integrate_energy_joules
+from src.metrics import (
+    compute_percentage_change,
+    integrate_energy_joules,
+    evaluate_result_status,
+    compute_authoritative_comparison,
+)
 
 app = FastAPI(
     title="Cluster-Based IoT Healthcare Encryption Demo",
@@ -69,6 +81,9 @@ run_store = RunStore()
 current_demo_records: List[SensorRecord] = []
 current_demo_seed: Optional[int] = None
 current_power_override: Optional[Any] = None
+current_pipeline_run_id: Optional[str] = None
+current_clustering_result: Optional[ClusteringResult] = None
+current_feature_vectors: List[FeatureVector] = []
 
 
 class McuScenarioRequest(BaseModel):
@@ -268,27 +283,381 @@ def run_mcu_scenario(req: McuScenarioRequest):
 
 @app.post("/api/demo/generate")
 def generate_synthetic_data(req: GenerateRequest):
-    """Generate a seeded batch of synthetic healthcare sensor records."""
-    global current_demo_records, current_demo_seed
+    """Generate a seeded batch of synthetic healthcare sensor records with ML K-Means clustering."""
+    global current_demo_records, current_demo_seed, current_pipeline_run_id, current_clustering_result, current_feature_vectors
+    pipeline_run_id = f"PIPE-S{req.seed}-{int(time.time())}"
     gen = SyntheticDataGenerator(seed=req.seed)
     records = gen.generate_batch(
         count=req.count,
         classifier=runner.classifier,
-        cluster_manager=runner.cluster_manager,
     )
+    for r in records:
+        r.pipeline_run_id = pipeline_run_id
+
+    high_group, low_group, clust_result = runner.cluster_manager.cluster_with_kmeans(
+        records, pipeline_run_id=pipeline_run_id
+    )
+
     current_demo_records = records
     current_demo_seed = req.seed
+    current_pipeline_run_id = pipeline_run_id
+    current_clustering_result = clust_result
+    current_feature_vectors = runner.cluster_manager.last_feature_vectors
 
-    high_group, low_group = runner.cluster_manager.form_clusters(records)
+    methodology = {
+        "generator_type": "Deterministic pseudo-random generator with fixed seed control",
+        "seed": req.seed,
+        "sample_count": len(records),
+        "sensor_modalities": [
+            {
+                "type": "HEART_RATE",
+                "unit": "bpm",
+                "distribution": "70% normal (62-92), 15% bradycardia (38-48), 15% tachycardia (105-140)",
+                "physiological_normal": [50.0, 100.0],
+            },
+            {
+                "type": "ECG_SUMMARY",
+                "unit": "mV",
+                "distribution": "Continuous uniform (0.65-1.85 mV) ST segment amplitude",
+                "physiological_normal": [0.5, 2.0],
+            },
+            {
+                "type": "TEMPERATURE",
+                "unit": "°C",
+                "distribution": "80% normothermia (36.4-37.3), 10% fever (38.2-39.8), 10% hypothermia (34.2-35.3)",
+                "physiological_normal": [35.5, 38.0],
+            },
+            {
+                "type": "STEP_COUNT",
+                "unit": "steps",
+                "distribution": "Discrete uniform (0-120 steps) cadence",
+                "physiological_normal": [0.0, 150.0],
+            },
+        ],
+        "reproducibility": "Identical seed reproduces exact floating-point values and timestamps.",
+        "scientific_disclaimer": "Synthetic dataset generated for cryptographic latency and energy benchmarking. Not real patient health records.",
+    }
+
+    # Persist immutable snapshot of this pipeline run
+    snapshot_data = {
+        "pipeline_run_id": pipeline_run_id,
+        "seed": req.seed,
+        "record_count": len(records),
+        "clustering_diagnostics": clust_result.diagnostics.model_dump() if clust_result else None,
+        "clustering_config": clust_result.config.model_dump() if clust_result else None,
+        "methodology": methodology,
+    }
+    run_store.save_pipeline_snapshot(pipeline_run_id, req.seed, len(records), snapshot_data)
 
     return {
+        "pipeline_run_id": pipeline_run_id,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
         "seed": req.seed,
         "count": len(records),
         "high_cluster_count": high_group.record_count,
         "low_cluster_count": low_group.record_count,
         "records_preview": [r.model_dump() for r in records[:20]],
         "all_records": [r.model_dump() for r in records],
+        "features_preview": [f.model_dump() for f in current_feature_vectors[:20]],
+        "all_features": [f.model_dump() for f in current_feature_vectors],
+        "clustering_diagnostics": clust_result.diagnostics.model_dump() if clust_result else None,
+        "clustering_config": clust_result.config.model_dump() if clust_result else None,
+        "generation_methodology": methodology,
     }
+
+
+@app.get("/api/pipeline/current")
+def get_current_pipeline():
+    """Retrieve the end-to-end state and intermediate data across all 7 pipeline stages."""
+    global current_demo_records, current_demo_seed, current_pipeline_run_id, current_clustering_result, current_feature_vectors
+    if not current_demo_records:
+        return {
+            "has_data": False,
+            "pipeline_run_id": None,
+            "message": "No active pipeline run. Generate synthetic data or run a benchmark to initialize.",
+        }
+
+    records_dump = [r.model_dump() for r in current_demo_records]
+    features_dump = [f.model_dump() for f in current_feature_vectors]
+    
+    high_cluster_records = [r for r in records_dump if r.get("cluster_label") == "CLUSTER-HIGH"]
+    low_cluster_records = [r for r in records_dump if r.get("cluster_label") == "CLUSTER-LOW"]
+    overrides = [r for r in records_dump if r.get("policy_override")]
+
+    return {
+        "has_data": True,
+        "pipeline_run_id": current_pipeline_run_id,
+        "seed": current_demo_seed,
+        "record_count": len(current_demo_records),
+        "stages": {
+            "stage1_raw": {
+                "name": "Synthetic Dataset Generation",
+                "record_count": len(records_dump),
+                "records": records_dump,
+                "provenance": {
+                    "pipeline_run_id": current_pipeline_run_id,
+                    "seed": current_demo_seed,
+                    "generator": "SyntheticDataGenerator",
+                    "time_anchor": "2026-10-13T10:00:00Z",
+                },
+            },
+            "stage2_features": {
+                "name": "Feature Engineering & Preprocessing",
+                "feature_names": HealthcareFeatureExtractor.FEATURE_NAMES,
+                "feature_count": len(HealthcareFeatureExtractor.FEATURE_NAMES),
+                "features": features_dump,
+                "normalization": "StandardScaler (z = (x - u) / s)",
+                "label_leakage_prevented": True,
+            },
+            "stage3_kmeans": {
+                "name": "Unsupervised K-Means Clustering",
+                "config": current_clustering_result.config.model_dump() if current_clustering_result else None,
+                "diagnostics": current_clustering_result.diagnostics.model_dump() if current_clustering_result else None,
+            },
+            "stage4_clustered": {
+                "name": "Post-Clustering Dataset with Guardrail",
+                "high_cluster_count": len(high_cluster_records),
+                "low_cluster_count": len(low_cluster_records),
+                "guardrail_override_count": len(overrides),
+                "records": records_dump,
+            },
+            "stage5_routing": {
+                "name": "Encryption Routing",
+                "baseline_route": "100% AES-256-GCM",
+                "adaptive_route": {
+                    "aes_256_gcm_count": sum(1 for r in records_dump if r.get("effective_security_class") == "HIGH"),
+                    "xor_lightweight_count": sum(1 for r in records_dump if r.get("effective_security_class") == "LOW"),
+                },
+            },
+            "stage6_receiver": {
+                "name": "Simulated Healthcare Receiver Verification",
+                "receiver_stats": receiver.get_stats(),
+            },
+            "stage7_benchmark": {
+                "name": "Energy & Timing Benchmark",
+                "recent_runs": run_store.list_runs(limit=5),
+            },
+        },
+    }
+
+
+@app.post("/api/pipeline/kmeans/configure")
+def configure_kmeans(config: KMeansConfig):
+    """Reconfigure and re-run K-Means on currently loaded records."""
+    global current_demo_records, current_pipeline_run_id, current_clustering_result, current_feature_vectors
+    if not current_demo_records:
+        raise HTTPException(status_code=400, detail="No active dataset. Generate records first.")
+    
+    high_group, low_group, clust_result = runner.cluster_manager.cluster_with_kmeans(
+        current_demo_records,
+        pipeline_run_id=current_pipeline_run_id,
+        config=config,
+    )
+    current_clustering_result = clust_result
+    current_feature_vectors = runner.cluster_manager.last_feature_vectors
+
+    return {
+        "status": "SUCCESS",
+        "pipeline_run_id": current_pipeline_run_id,
+        "high_cluster_count": high_group.record_count,
+        "low_cluster_count": low_group.record_count,
+        "clustering_config": clust_result.config.model_dump() if clust_result else None,
+        "clustering_diagnostics": clust_result.diagnostics.model_dump() if clust_result else None,
+    }
+
+
+@app.get("/api/pipeline/features")
+def get_pipeline_features():
+    """Retrieve engineered feature vectors for the current pipeline run."""
+    global current_feature_vectors, current_pipeline_run_id
+    if not current_feature_vectors:
+        raise HTTPException(status_code=404, detail="No feature vectors found. Generate a dataset first.")
+    return {
+        "pipeline_run_id": current_pipeline_run_id,
+        "feature_names": HealthcareFeatureExtractor.FEATURE_NAMES,
+        "features": [f.model_dump() for f in current_feature_vectors],
+    }
+
+
+@app.get("/api/pipeline/clustering")
+def get_pipeline_clustering():
+    """Retrieve K-Means clustering result and diagnostics for the current run."""
+    global current_clustering_result, current_pipeline_run_id
+    if not current_clustering_result:
+        raise HTTPException(status_code=404, detail="No clustering results found. Generate a dataset first.")
+    return {
+        "pipeline_run_id": current_pipeline_run_id,
+        "clustering": current_clustering_result.model_dump(),
+    }
+
+
+@app.get("/api/pipeline/export/{stage}.csv")
+def export_pipeline_stage_csv(stage: str):
+    """Export a specific pipeline stage intermediate dataset as CSV."""
+    global current_demo_records, current_feature_vectors, current_pipeline_run_id
+    if not current_demo_records:
+        raise HTTPException(status_code=400, detail="No active dataset available for export.")
+
+    run_id = current_pipeline_run_id or "UNKNOWN-PIPE"
+    output = io.StringIO()
+    writer = csv.writer(output)
+
+    stage_key = stage.lower()
+    if stage_key in ["raw", "stage1", "stage1_raw"]:
+        writer.writerow(["record_id", "timestamp", "demo_patient_id", "record_type", "value", "unit", "is_synthetic", "pipeline_run_id"])
+        for r in current_demo_records:
+            writer.writerow([r.record_id, r.timestamp, r.demo_patient_id, r.record_type.value, r.value, r.unit, r.is_synthetic, r.pipeline_run_id or run_id])
+        filename = f"stage1_raw_dataset_{run_id}.csv"
+    elif stage_key in ["features", "stage2", "stage2_features"]:
+        writer.writerow(["record_id", "type_heart_rate", "type_ecg_summary", "type_temperature", "type_step_count", "raw_measurement", "physiological_range_deviation", "pipeline_run_id"])
+        for fv in current_feature_vectors:
+            writer.writerow([
+                fv.record_id,
+                fv.features.get("type_heart_rate", 0.0),
+                fv.features.get("type_ecg_summary", 0.0),
+                fv.features.get("type_temperature", 0.0),
+                fv.features.get("type_step_count", 0.0),
+                fv.features.get("raw_measurement", 0.0),
+                fv.features.get("physiological_range_deviation", 0.0),
+                run_id,
+            ])
+        filename = f"stage2_features_{run_id}.csv"
+    elif stage_key in ["clustered", "stage3", "stage4", "stage4_clustered", "kmeans"]:
+        writer.writerow(["record_id", "record_type", "value", "unit", "kmeans_cluster_id", "cluster_label", "policy_sensitivity", "effective_security_class", "policy_override", "override_reason", "pipeline_run_id"])
+        for r in current_demo_records:
+            writer.writerow([
+                r.record_id,
+                r.record_type.value,
+                r.value,
+                r.unit,
+                r.kmeans_cluster_id,
+                r.cluster_label,
+                r.policy_sensitivity.value if r.policy_sensitivity else (r.sensitivity.value if r.sensitivity else "LOW"),
+                r.effective_security_class.value if r.effective_security_class else "LOW",
+                1 if r.policy_override else 0,
+                r.override_reason or "",
+                r.pipeline_run_id or run_id,
+            ])
+        filename = f"stage4_clustered_dataset_{run_id}.csv"
+    else:
+        raise HTTPException(status_code=400, detail=f"Unknown export stage '{stage}'. Valid stages: raw, features, clustered.")
+
+    output.seek(0)
+    return StreamingResponse(
+        io.BytesIO(output.getvalue().encode("utf-8")),
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
+
+
+@app.get("/api/pipeline/export/{stage}.json")
+def export_pipeline_stage_json(stage: str):
+    """Export a specific pipeline stage intermediate dataset as JSON."""
+    global current_demo_records, current_feature_vectors, current_pipeline_run_id, current_clustering_result
+    if not current_demo_records:
+        raise HTTPException(status_code=400, detail="No active dataset available for export.")
+
+    run_id = current_pipeline_run_id or "UNKNOWN-PIPE"
+    stage_key = stage.lower()
+    if stage_key in ["raw", "stage1", "stage1_raw"]:
+        data = {
+            "stage": "stage1_raw_dataset",
+            "pipeline_run_id": run_id,
+            "exported_at": datetime.now(timezone.utc).isoformat(),
+            "record_count": len(current_demo_records),
+            "records": [r.model_dump() for r in current_demo_records],
+        }
+        filename = f"stage1_raw_dataset_{run_id}.json"
+    elif stage_key in ["features", "stage2", "stage2_features"]:
+        data = {
+            "stage": "stage2_features",
+            "pipeline_run_id": run_id,
+            "exported_at": datetime.now(timezone.utc).isoformat(),
+            "feature_names": HealthcareFeatureExtractor.FEATURE_NAMES,
+            "feature_count": len(HealthcareFeatureExtractor.FEATURE_NAMES),
+            "records": [fv.model_dump() for fv in current_feature_vectors],
+        }
+        filename = f"stage2_features_{run_id}.json"
+    elif stage_key in ["clustered", "stage3", "stage4", "stage4_clustered", "kmeans"]:
+        data = {
+            "stage": "stage4_clustered_dataset",
+            "pipeline_run_id": run_id,
+            "exported_at": datetime.now(timezone.utc).isoformat(),
+            "record_count": len(current_demo_records),
+            "clustering_diagnostics": current_clustering_result.diagnostics.model_dump() if current_clustering_result else None,
+            "records": [r.model_dump() for r in current_demo_records],
+        }
+        filename = f"stage4_clustered_dataset_{run_id}.json"
+    else:
+        raise HTTPException(status_code=400, detail=f"Unknown export stage '{stage}'. Valid stages: raw, features, clustered.")
+
+    return Response(
+        content=json.dumps(data, indent=2),
+        media_type="application/json",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
+
+
+@app.get("/api/battery/energy-model")
+def get_energy_model_details():
+    """Authoritative breakdown of the battery simulation equations, assumptions, and constants."""
+    global mcu_config
+    model = McuEnergyModel(mcu_config)
+    breakdown = model.calculate_scenario(
+        total_records=100,
+        high_sensitivity_count=45,
+        low_sensitivity_count=55,
+    )
+    return {
+        "mcu_specification": {
+            "target": mcu_config.mcu_model_name,
+            "clock_frequency_hz": mcu_config.mcu_clock_hz,
+            "operating_voltage_v": mcu_config.supply_voltage_v,
+            "has_hardware_aes": False,
+        },
+        "battery_specification": {
+            "nominal_capacity_mah": mcu_config.battery_nominal_mah,
+            "nominal_capacity_ah": mcu_config.battery_nominal_mah / 1000.0,
+            "usable_capacity_factor": mcu_config.battery_usable_factor,
+            "usable_capacity_mah": mcu_config.battery_nominal_mah * mcu_config.battery_usable_factor,
+            "usable_energy_joules": round(
+                (mcu_config.battery_nominal_mah / 1000.0) * 3600.0 * mcu_config.supply_voltage_v * mcu_config.battery_usable_factor,
+                2
+            ),
+            "voltage_reference_explanation": "Model assumes battery terminal voltage is regulated by a low-dropout (LDO) or buck converter to 3.3V system rail.",
+        },
+        "mathematical_formulas": {
+            "power_w": "P = V x I (Voltage in Volts x Current in Amperes)",
+            "energy_constant_current_j": "E = V x I x t (Voltage x Current x Duration in seconds)",
+            "energy_numerical_integration_j": "E ≈ Σ [ (P_i + P_{i+1}) / 2 x Δt ] (Trapezoidal integration for lab CSV logs)",
+            "battery_charge_consumed_mah": "Q = I_mean x (t_seconds / 3600.0)",
+            "batch_battery_depletion_percent": "Depletion % = (Batch Energy / Usable Battery Energy) x 100",
+            "non_overlapping_intervals": "T_total = T_shared + T_crypto + T_radio + T_idle. Current states are mutually exclusive to avoid double counting.",
+        },
+        "evidence_hierarchy": [
+            {
+                "tier": "A",
+                "badge": "DESKTOP_MEASURED_HOST",
+                "label": "Host CPU Measured Timing",
+                "description": "Host PC execution time measured with high-precision perf_counter_ns(). Reflects x86/ARM host software speed, NOT MCU energy.",
+            },
+            {
+                "tier": "B",
+                "badge": "MODELED_ESTIMATED_MCU",
+                "label": "Modeled / Estimated MCU Energy",
+                "description": "Analytical energy model based on 16 MHz clock, datasheet active/sleep current, non-overlapping task intervals, and configurable radio airtime.",
+            },
+            {
+                "tier": "C",
+                "badge": "INSTRUMENT_MEASURED_LAB",
+                "label": "Instrument-Measured Lab Energy",
+                "description": "Empirical voltage and current samples imported from physical power analyzer or shunt monitor via /api/power/import.",
+            },
+        ],
+        "active_parameters": mcu_config.model_dump(),
+        "reference_100_record_breakdown": breakdown,
+    }
+
 
 
 @app.post("/api/benchmark/run")
@@ -562,11 +931,14 @@ def export_run_json(run_id: str):
 @app.post("/api/demo/reset")
 def reset_demo():
     """Reset store, receiver stats, and state back to default."""
-    global current_demo_records, current_power_override
+    global current_demo_records, current_power_override, current_pipeline_run_id, current_clustering_result, current_feature_vectors
     run_store.reset()
     receiver.reset_stats()
     current_demo_records = []
     current_power_override = None
+    current_pipeline_run_id = None
+    current_clustering_result = None
+    current_feature_vectors = []
     runner.reset_cancellation()
     return {"message": "Demo state reset successfully."}
 

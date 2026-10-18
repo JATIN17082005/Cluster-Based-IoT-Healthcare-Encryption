@@ -49,7 +49,62 @@ class SensorRecord(BaseModel):
     classification_reason: Optional[str] = None
     cluster_id: Optional[str] = None
 
+    # Lineage and ML K-Means clustering traceability
+    pipeline_run_id: Optional[str] = None
+    kmeans_cluster_id: Optional[int] = None
+    cluster_label: Optional[str] = None
+    policy_sensitivity: Optional[SensitivityLevel] = None
+    effective_security_class: Optional[SensitivityLevel] = None
+    policy_override: bool = False
+    override_reason: Optional[str] = None
+
     model_config = {"frozen": False}
+
+
+class FeatureVector(BaseModel):
+    """Engineered and standardized features for a single sensor record."""
+    record_id: str
+    record_type: str
+    raw_value: float
+    unit: str
+    features: Dict[str, float]
+    scaled_features: Dict[str, float]
+
+
+class KMeansConfig(BaseModel):
+    """Configuration parameters for scikit-learn K-Means model."""
+    n_clusters: int = 2
+    random_state: int = 42
+    n_init: int = 10
+    algorithm: str = "lloyd"
+
+
+class KMeansDiagnostics(BaseModel):
+    """Mathematical and security diagnostic metrics for K-Means clustering run."""
+    n_samples: int
+    n_features: int
+    feature_names: List[str]
+    cluster_counts: Dict[str, int]
+    semantic_counts: Dict[str, int]
+    centroids: Dict[str, Dict[str, float]]
+    unscaled_centroids: Dict[str, Dict[str, float]]
+    inertia: float
+    silhouette_score: Optional[float] = None
+    silhouette_note: Optional[str] = None
+    agreement_ratio: float
+    confusion_matrix: Dict[str, int]
+    guardrail_overrides_count: int
+    warnings: List[str] = Field(default_factory=list)
+
+
+class ClusteringResult(BaseModel):
+    """Outcome of fitting and predicting with real K-Means on a dataset."""
+    pipeline_run_id: str
+    config: KMeansConfig
+    diagnostics: KMeansDiagnostics
+    total_records: int
+    cluster_mapping: Dict[str, str]
+
 
 
 class SensitivityRule(BaseModel):

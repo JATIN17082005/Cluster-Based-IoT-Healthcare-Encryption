@@ -113,6 +113,19 @@ class LocalHealthcareReceiver:
         """Return counts of received, accepted, and rejected packets for a run."""
         return self._stats.get(run_id, {"received": 0, "accepted": 0, "rejected": 0})
 
+    def get_stats(self) -> Dict[str, Any]:
+        """Return total aggregated receiver statistics across all runs."""
+        total_recv = sum(s.get("received", 0) for s in self._stats.values())
+        total_acc = sum(s.get("accepted", 0) for s in self._stats.values())
+        total_rej = sum(s.get("rejected", 0) for s in self._stats.values())
+        return {
+            "total_received": total_recv,
+            "total_accepted": total_acc,
+            "total_rejected": total_rej,
+            "active_runs": list(self._stats.keys()),
+        }
+
     def get_run_results(self, run_id: str) -> List[ReceiverVerificationResult]:
         """Return detailed verification results for a run."""
         return self._results_by_run.get(run_id, [])
+

@@ -88,9 +88,39 @@ class RunStore:
                     classification_reason TEXT NOT NULL,
                     cluster_id TEXT NOT NULL,
                     timestamp TEXT NOT NULL,
+                    pipeline_run_id TEXT,
+                    kmeans_cluster_id INTEGER,
+                    cluster_label TEXT,
+                    policy_sensitivity TEXT,
+                    effective_security_class TEXT,
+                    policy_override INTEGER DEFAULT 0,
+                    override_reason TEXT,
                     FOREIGN KEY (run_id) REFERENCES runs (run_id)
                 )
             """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS pipeline_snapshots (
+                    pipeline_run_id TEXT PRIMARY KEY,
+                    seed INTEGER NOT NULL,
+                    record_count INTEGER NOT NULL,
+                    stage_data_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                )
+            """)
+            # Migration check for existing databases
+            for col, col_type in [
+                ("pipeline_run_id", "TEXT"),
+                ("kmeans_cluster_id", "INTEGER"),
+                ("cluster_label", "TEXT"),
+                ("policy_sensitivity", "TEXT"),
+                ("effective_security_class", "TEXT"),
+                ("policy_override", "INTEGER DEFAULT 0"),
+                ("override_reason", "TEXT"),
+            ]:
+                try:
+                    cursor.execute(f"ALTER TABLE records ADD COLUMN {col} {col_type}")
+                except sqlite3.OperationalError:
+                    pass
             conn.commit()
 
     def save_run(self, metrics: BatchMetrics, records: Optional[List[SensorRecord]] = None):
@@ -153,8 +183,11 @@ class RunStore:
                     cursor.execute("""
                         INSERT INTO records (
                             run_id, record_id, record_type, value, unit,
-                            sensitivity, classification_reason, cluster_id, timestamp
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            sensitivity, classification_reason, cluster_id, timestamp,
+                            pipeline_run_id, kmeans_cluster_id, cluster_label,
+                            policy_sensitivity, effective_security_class,
+                            policy_override, override_reason
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """, (
                         metrics.run_id,
                         rec.record_id,
@@ -165,6 +198,13 @@ class RunStore:
                         rec.classification_reason or "",
                         rec.cluster_id or "",
                         rec.timestamp,
+                        getattr(rec, "pipeline_run_id", None),
+                        getattr(rec, "kmeans_cluster_id", None),
+                        getattr(rec, "cluster_label", None),
+                        rec.policy_sensitivity.value if getattr(rec, "policy_sensitivity", None) else None,
+                        rec.effective_security_class.value if getattr(rec, "effective_security_class", None) else None,
+                        1 if getattr(rec, "policy_override", False) else 0,
+                        getattr(rec, "override_reason", None),
                     ))
 
             conn.commit()
@@ -201,11 +241,80 @@ class RunStore:
             cursor = conn.cursor()
             cursor.execute("""
                 SELECT record_id, record_type, value, unit, sensitivity,
-                       classification_reason, cluster_id, timestamp
+                       classification_reason, cluster_id, timestamp,
+                       pipeline_run_id, kmeans_cluster_id, cluster_label,
+                       policy_sensitivity, effective_security_class,
+                       policy_override, override_reason
                 FROM records
                 WHERE run_id = ?
             """, (run_id,))
             return [dict(row) for row in cursor.fetchall()]
+
+    def save_pipeline_snapshot(
+        self,
+        pipeline_run_id: str,
+        seed: int,
+        record_count: int,
+        stage_data: Dict[str, Any],
+        created_at: Optional[str] = None,
+    ):
+        """Save an immutable snapshot of a full 7-stage pipeline run."""
+        from datetime import datetime, timezone
+        ts = created_at or datetime.now(timezone.utc).isoformat()
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT OR REPLACE INTO pipeline_snapshots (
+                    pipeline_run_id, seed, record_count, stage_data_json, created_at
+                ) VALUES (?, ?, ?, ?, ?)
+            """, (
+                pipeline_run_id,
+                seed,
+                record_count,
+                json.dumps(stage_data),
+                ts,
+            ))
+            conn.commit()
+
+    def get_pipeline_snapshot(self, pipeline_run_id: str) -> Optional[Dict[str, Any]]:
+        """Retrieve a pipeline snapshot by its ID."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT pipeline_run_id, seed, record_count, stage_data_json, created_at FROM pipeline_snapshots WHERE pipeline_run_id = ?",
+                (pipeline_run_id,),
+            )
+            row = cursor.fetchone()
+            if row:
+                return {
+                    "pipeline_run_id": row["pipeline_run_id"],
+                    "seed": row["seed"],
+                    "record_count": row["record_count"],
+                    "stage_data": json.loads(row["stage_data_json"]),
+                    "created_at": row["created_at"],
+                }
+            return None
+
+    def get_latest_pipeline_snapshot(self) -> Optional[Dict[str, Any]]:
+        """Retrieve the most recent pipeline snapshot."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT pipeline_run_id, seed, record_count, stage_data_json, created_at
+                FROM pipeline_snapshots
+                ORDER BY created_at DESC
+                LIMIT 1
+            """)
+            row = cursor.fetchone()
+            if row:
+                return {
+                    "pipeline_run_id": row["pipeline_run_id"],
+                    "seed": row["seed"],
+                    "record_count": row["record_count"],
+                    "stage_data": json.loads(row["stage_data_json"]),
+                    "created_at": row["created_at"],
+                }
+            return None
 
     def reset(self):
         """Clear all stored runs and records."""

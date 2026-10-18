@@ -297,7 +297,7 @@ class McuEnergyModel:
         """
         cfg = self.config
         if radio_tx_ms_override is not None:
-            cfg = cfg.model_copy(update={"t_radio_tx_ms": max(0.01, float(radio_tx_ms_override))})
+            cfg = cfg.model_copy(update={"t_radio_tx_ms": max(0.0, float(radio_tx_ms_override))})
         elif profile_name in ["short_tx", "compute"]:
             cfg = cfg.model_copy(update={"t_radio_tx_ms": 0.50})
         elif profile_name in ["radio_heavy", "heavy"]:
