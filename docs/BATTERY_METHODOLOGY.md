@@ -101,13 +101,84 @@ External power CSV uploads (`/api/power/import`) enforce strict validation:
 
 ---
 
-## 6. Indicative Battery Runtime Calculation
+## 6. Battery Capacity & Voltage Reconciliation (Cell vs Regulated Rail)
 
-Battery runtime is calculated **only** when battery nominal capacity, nominal voltage, and load assumptions are supplied:
-$$\text{Runtime (Hours)} = \frac{C_{\text{nominal}} \times F_{\text{usable}}}{I_{\text{mean}}}$$
-- $C_{\text{nominal}}$: Battery rated capacity in $\text{mAh}$.
-- $F_{\text{usable}}$: Usable depth-of-discharge factor (default $0.85$).
-- $I_{\text{mean}}$: Operating average current in $\text{mA}$.
+In embedded IoT telemetry nodes, current measurements and power calculations occur across distinct voltage domains that must not be conflated:
 
-> [!WARNING]
-> Battery runtime is an indicative linear projection. In real deployments, runtime is non-linear and governed by Peukert's law, temperature, battery internal resistance (ESR), and switching regulator efficiency.
+### A. 1S Li-Po Electrochemical Cell (Supply Source)
+- **Nominal Cell Voltage ($V_{\text{cell}}$):** $3.7\,\text{V}$ (standard Lithium-ion / Lithium-Polymer nominal open-circuit voltage).
+- **Nominal Capacity ($C_{\text{nom}}$):** $1200\,\text{mAh} = 1.2\,\text{Ah}$.
+- **Total Electrochemical Cell Energy:**
+  $$E_{\text{cell, total}} = 1.2\,\text{Ah} \times 3.7\,\text{V} \times 3600\,\text{s/h} = 15,984.00\,\text{J}$$
+- **Usable Electrochemical Cell Energy ($85\%$ Depth of Discharge):**
+  $$E_{\text{cell, usable}} = 15,984.00\,\text{J} \times 0.85 = 13,586.40\,\text{J}$$
+
+### B. Microcontroller Regulated Rail (Measurement Boundary)
+- **Regulated Supply Rail ($V_{\text{rail}}$):** $3.3\,\text{V}$ (stepped down from $3.7\,\text{V}$ via on-board low-dropout linear regulator, LDO).
+- **Measurement Boundary:** All microcontroller active, cryptographic, and radio currents ($I_{\text{active}}, I_{\text{crypto}}, I_{\text{tx}}, I_{\text{sleep}}$) are measured or modeled at this **$3.3\,\text{V}$ regulated rail boundary**.
+- **Linear LDO Step-Down Efficiency:**
+  $$\eta_{\text{LDO}} = \frac{V_{\text{rail}}}{V_{\text{cell}}} = \frac{3.3\,\text{V}}{3.7\,\text{V}} \approx 89.189\% \quad (\approx 89.2\%)$$
+- **Usable Energy Delivered to the $3.3\,\text{V}$ Rail:**
+  $$E_{\text{rail, usable}} = 13,586.40\,\text{J} \times \eta_{\text{LDO}} = 1.2\,\text{Ah} \times 3.3\,\text{V} \times 3600\,\text{s/h} \times 0.85 = 12,117.60\,\text{J}$$
+
+This rigorous mathematical relationship reconciles why the dashboard reports $12,117.60\,\text{J}$ usable energy for the $3.3\,\text{V}$ operating rail alongside the $13,586.40\,\text{J}$ usable energy of the $3.7\,\text{V}$ cell.
+
+---
+
+## 7. Execution Time and CPU Cycle Accounting at 16 MHz
+
+The embedded microcontroller model targets an edge processor running at $16\,\text{MHz}$ (ARM Cortex-M0+ or 8-bit AVR architecture) without hardware AES coprocessor instructions.
+At $16\,\text{MHz}$, clock cycles convert directly to time:
+$$\text{Cycles} = \text{Duration (ms)} \times 16,000 \quad \left(1\,\text{ms} = 16,000\,\text{clock cycles}\right)$$
+
+### Cryptographic Stage Comparison per Record:
+
+| Operation | Stage / Algorithm | Duration ($t$) | Current ($I$) | Cycles @ $16\,\text{MHz}$ | Energy ($V_{\text{rail}} \cdot I \cdot t$) |
+|---|---|---|---|---|---|
+| **Baseline High/Routine** | AES-128/256 software | $1.250\,\text{ms}$ | $12.5\,\text{mA}$ | $20,000$ | $0.05156\,\text{mJ}$ |
+| **Adaptive High-Sensitivity** | AES-256-GCM | $1.250\,\text{ms}$ | $12.5\,\text{mA}$ | $20,000$ | $0.05156\,\text{mJ}$ |
+| **Adaptive Routine (SHA-256)** | SHA-256 block hash | $0.400\,\text{ms}$ | $10.5\,\text{mA}$ | $6,400$ | $0.01386\,\text{mJ}$ |
+| **Adaptive Routine (XOR)** | Streaming bitwise XOR | $0.090\,\text{ms}$ | $7.5\,\text{mA}$ | $1,440$ | $0.00223\,\text{mJ}$ |
+| **Adaptive Routine (HMAC)** | HMAC-SHA256 tag | $0.150\,\text{ms}$ | $10.5\,\text{mA}$ | $2,400$ | $0.00520\,\text{mJ}$ |
+| **Adaptive Routine Composite** | SHA + XOR + HMAC | **$0.640\,\text{ms}$** | **$9.61\,\text{mA}$ avg** | **$10,240$** | **$0.02129\,\text{mJ}$** |
+
+In addition, each record undergoes shared sensor preprocessing:
+- **Sensor Preprocessing ($t_{\text{proc}}$):** $0.350\,\text{ms}$ ($5,600$ cycles) at $8.0\,\text{mA}$ ($0.00924\,\text{mJ}$).
+
+### Computational Efficiency Gain:
+For routine telemetry records, transitioning from software AES to the composite SHA-256 + XOR + HMAC route yields:
+$$\Delta \text{Cycles} = \frac{20,000 - 10,240}{20,000} \times 100\% = 48.80\% \text{ reduction in cryptographic CPU cycles}$$
+$$\Delta E_{\text{crypto}} = \frac{0.05156\,\text{mJ} - 0.02129\,\text{mJ}}{0.05156\,\text{mJ}} \times 100\% = 58.71\% \text{ reduction in cryptographic energy}$$
+
+---
+
+## 8. Indicative Battery Runtime & Duty Cycle Model
+
+Battery runtime is calculated using an explicit, defensible duty-cycle model:
+$$\text{Runtime (Hours)} = \frac{C_{\text{nominal}} \times F_{\text{usable}}}{I_{\text{effective}}}$$
+
+### Duty-Cycle Formulation:
+- **Reporting Period ($T_{\text{period}}$):** Configured as $1000.0\,\text{ms}$ ($1\,\text{Hz}$ telemetry cadence).
+- **Active Time per Record ($t_{\text{active}}$):**
+  $$t_{\text{active}} = t_{\text{proc}} + t_{\text{crypto}} + t_{\text{tx}}$$
+  - Baseline: $0.35\,\text{ms} + 1.25\,\text{ms} + 1.50\,\text{ms} = 3.10\,\text{ms}$ per record (Scenario A) or $2.10\,\text{ms}$ (Scenario B).
+  - Duty cycle: $\approx 0.2\% - 0.3\%$.
+- **Sleep Time per Record ($t_{\text{sleep}}$):**
+  $$t_{\text{sleep}} = T_{\text{period}} - t_{\text{active}}$$
+- **Sleep Current ($I_{\text{sleep}}$):** $15\,\mu\text{A} = 0.015\,\text{mA}$ (Cortex-M0+ low-power deep sleep mode with RTC alarm).
+- **Effective Average Current ($I_{\text{effective}}$):**
+  $$I_{\text{effective}} = \frac{I_{\text{active}} \cdot t_{\text{active}} + I_{\text{sleep}} \cdot t_{\text{sleep}}}{T_{\text{period}}}$$
+
+> [!NOTE]
+> Indicative battery runtime reflects periodic $1\,\text{Hz}$ telemetry with deep sleep. Continuous active-loop execution without sleep is unrepresentative of real IoT devices and leads to artificially truncated runtimes.
+
+---
+
+## 9. Hardware Interface vs Laboratory Measurement Provenance
+
+The system enforces clear evidence tier labeling across all modes:
+- **Tier A — Desktop Measured Host (`DESKTOP_MEASURED_HOST`):** Wall-clock execution on host workstation. Demonstrates that adaptive classification adds CPU overhead on desktop architectures where AES-NI hardware acceleration exists.
+- **Tier B — Modeled / Estimated MCU (`MODELED_ESTIMATED_MCU`):** Mathematical energy simulator modeling embedded IoT hardware. Parameters are explicitly configurable and labeled as hypothetical or literature-derived.
+- **Tier C — Instrument Measured Lab (`INSTRUMENT_MEASURED_LAB`):** Time-series power samples imported via `/api/power/import` from calibrated laboratory measurement tools (Monsoon, Otii, Keysight).
+- **Hardware Serial Interface (`INTERFACE_PLACEHOLDER_HARDWARE_PENDING`):** The `HardwareSerialPowerAdapter` class provides a defined interface for real-time serial DAQ boards (such as INA219/INA226). In the absence of attached physical hardware, it reports placeholder status and safely directs the user to CSV laboratory log imports.
+

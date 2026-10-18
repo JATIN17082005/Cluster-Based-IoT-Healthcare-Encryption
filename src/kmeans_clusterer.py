@@ -1,13 +1,16 @@
 """Machine-learning K-Means clustering pipeline for IoT healthcare data.
-Uses scikit-learn KMeans and StandardScaler with feature engineering,
-deterministic semantic mapping, security safety guardrail, and diagnostics.
+Uses scikit-learn KMeans and StandardScaler with modality-aware feature engineering,
+defensible calibration and held-out evaluation, deterministic semantic mapping,
+clinical security safety guardrails, and diagnostics.
 
 Academic Notice:
 This module performs unsupervised clustering on extracted physiological features.
-Sensitivity policies act as an external ground-truth reference for semantic evaluation
-and as an inviolable security safety guardrail to prevent privacy downgrades.
+Sensitivity policies act as an external reference for evaluation and as an inviolable
+security safety guardrail to prevent privacy downgrades. Within-run agreement evaluates
+concordance against synthetic heuristic policy rules, NOT physical clinical diagnosis.
 """
 
+import math
 from typing import List, Dict, Tuple, Optional, Any
 import numpy as np
 from sklearn.cluster import KMeans
@@ -27,15 +30,21 @@ from src.models import (
 
 
 class HealthcareFeatureExtractor:
-    """Extracts numerical features from synthetic healthcare sensor records without target leakage.
+    """Extracts modality-aware numerical features from synthetic healthcare sensor records without target leakage.
 
     Feature Matrix:
     1. type_heart_rate: One-hot indicator for heart rate sensor.
     2. type_ecg_summary: One-hot indicator for ECG summary sensor.
     3. type_temperature: One-hot indicator for body temperature sensor.
     4. type_step_count: One-hot indicator for ambulatory step cadence sensor.
-    5. raw_measurement: The raw recorded float value.
-    6. physiological_range_deviation: Normalized distance from standard resting physiological normal.
+    5. modality_normalized_value: Continuous measurement normalized against its sensor modality's physiological span [0.0, 1.0].
+    6. physiological_range_deviation: Normalized distance from resting physiological normal limits.
+
+    Academic Design Note:
+    StandardScaler alone cannot make raw bpm (e.g. 75), body temperature in °C (e.g. 37.0),
+    ECG voltage in mV (e.g. 1.0), and step counts (e.g. 40) directly comparable when pooled
+    in a single raw column. Modality-specific normalization maps each measurement into a dimensionless
+    [0.0, 1.0] interval relative to its own physical physiological span before clustering.
     """
 
     FEATURE_NAMES = [
@@ -43,17 +52,60 @@ class HealthcareFeatureExtractor:
         "type_ecg_summary",
         "type_temperature",
         "type_step_count",
-        "raw_measurement",
+        "modality_normalized_value",
         "physiological_range_deviation",
     ]
 
-    # Clinical physiological reference boundaries for deviation extraction
+    # Physiological physical dynamic spans per sensor modality
+    MODALITY_SPANS = {
+        RecordType.HEART_RATE: {"min": 30.0, "max": 220.0, "unit": "bpm"},
+        RecordType.TEMPERATURE: {"min": 34.0, "max": 42.0, "unit": "degC"},
+        RecordType.ECG_SUMMARY: {"min": 0.0, "max": 3.0, "unit": "mV"},
+        RecordType.STEP_COUNT: {"min": 0.0, "max": 200.0, "unit": "steps"},
+    }
+
+    # Reconciled clinical reference boundaries for deviation calculation
+    # Heart Rate: normal [50, 100] bpm, center 75 bpm, scale 25 bpm
+    # Temperature: normothermic [35.5, 38.0] °C, center 36.75 °C, scale 1.25 °C
+    # ECG Summary: diagnostic peak [0.8, 1.4] mV, center 1.0 mV, scale 0.4 mV
+    # Step Count: routine cadence [0, 100] steps, center 30 steps, scale 50 steps
     NORMAL_RANGES = {
         RecordType.HEART_RATE: {"min": 50.0, "max": 100.0, "center": 75.0, "scale": 25.0},
         RecordType.TEMPERATURE: {"min": 35.5, "max": 38.0, "center": 36.75, "scale": 1.25},
         RecordType.ECG_SUMMARY: {"min": 0.8, "max": 1.4, "center": 1.0, "scale": 0.4},
         RecordType.STEP_COUNT: {"min": 0.0, "max": 100.0, "center": 30.0, "scale": 50.0},
     }
+
+    @classmethod
+    def validate_and_sanitize_value(cls, rec_type: RecordType, raw_val: Any) -> float:
+        """Validate input sensor measurement, handling NaN, Inf, or invalid types safely."""
+        try:
+            val = float(raw_val)
+        except (ValueError, TypeError):
+            val = cls.NORMAL_RANGES.get(rec_type, {}).get("center", 0.0)
+
+        if math.isnan(val) or math.isinf(val):
+            val = cls.NORMAL_RANGES.get(rec_type, {}).get("center", 0.0)
+
+        # Physical boundary sanity checks
+        if rec_type == RecordType.HEART_RATE and val < 0.0:
+            val = 0.0
+        elif rec_type == RecordType.STEP_COUNT and val < 0.0:
+            val = 0.0
+
+        return float(val)
+
+    @classmethod
+    def calculate_modality_normalized_value(cls, rec_type: RecordType, value: float) -> float:
+        """Normalize measurement within its own modality's physiological span into [0.0, 1.0]."""
+        span = cls.MODALITY_SPANS.get(rec_type)
+        if not span:
+            return 0.0
+
+        span_min = span["min"]
+        span_max = span["max"]
+        clamped = max(span_min, min(span_max, value))
+        return float((clamped - span_min) / (span_max - span_min))
 
     @classmethod
     def calculate_range_deviation(cls, rec_type: RecordType, value: float) -> float:
@@ -78,22 +130,27 @@ class HealthcareFeatureExtractor:
 
     @classmethod
     def extract_features(cls, record: SensorRecord) -> Dict[str, float]:
-        """Extract unscaled feature dictionary for a single record."""
+        """Extract unscaled feature dictionary for a single record.
+        Includes all 6 clustering features plus raw_measurement for traceability and backward compatibility.
+        """
         rec_type = record.record_type
-        deviation = cls.calculate_range_deviation(rec_type, record.value)
+        sanitized_val = cls.validate_and_sanitize_value(rec_type, record.value)
+        modality_norm = cls.calculate_modality_normalized_value(rec_type, sanitized_val)
+        deviation = cls.calculate_range_deviation(rec_type, sanitized_val)
 
         return {
             "type_heart_rate": 1.0 if rec_type == RecordType.HEART_RATE else 0.0,
             "type_ecg_summary": 1.0 if rec_type == RecordType.ECG_SUMMARY else 0.0,
             "type_temperature": 1.0 if rec_type == RecordType.TEMPERATURE else 0.0,
             "type_step_count": 1.0 if rec_type == RecordType.STEP_COUNT else 0.0,
-            "raw_measurement": float(record.value),
+            "modality_normalized_value": float(modality_norm),
             "physiological_range_deviation": float(deviation),
+            "raw_measurement": float(sanitized_val),
         }
 
     @classmethod
     def build_matrix(cls, records: List[SensorRecord]) -> Tuple[np.ndarray, List[Dict[str, float]]]:
-        """Build NumPy feature matrix for a batch of records."""
+        """Build NumPy feature matrix for a batch of records using FEATURE_NAMES."""
         if not records:
             return np.empty((0, len(cls.FEATURE_NAMES))), []
 
@@ -107,12 +164,12 @@ class HealthcareFeatureExtractor:
 
 class KMeansPipeline:
     """Complete machine-learning clustering pipeline for IoT telemetry.
-    1. Feature extraction without label leakage.
+    1. Feature extraction with modality-aware normalization (no label leakage).
     2. Standardization via StandardScaler.
-    3. Unsupervised K-Means clustering.
+    3. Defensible calibration and held-out evaluation workflow.
     4. Deterministic semantic mapping to CLUSTER-HIGH and CLUSTER-LOW.
     5. Inviolable security guardrail protecting clinical HIGH records.
-    6. Comprehensive diagnostic reporting.
+    6. Comprehensive diagnostic reporting with explicit limitation disclosures.
     """
 
     def __init__(self, config: Optional[KMeansConfig] = None):
@@ -125,77 +182,146 @@ class KMeansPipeline:
         self,
         records: List[SensorRecord],
         pipeline_run_id: str = "PIPE-DEFAULT",
+        calibration_ratio: float = 0.5,
     ) -> Tuple[ClusteringResult, List[FeatureVector]]:
-        """Fit K-Means, transform records, apply security guardrails, and return full diagnostics."""
+        """Fit K-Means, calibrate cluster orientation, evaluate on held-out split,
+        apply security guardrails, and return full diagnostics.
+        """
         n_records = len(records)
         if n_records == 0:
             raise ValueError("Cannot perform K-Means clustering on an empty record set.")
 
-        # 1. Feature Extraction
-        feature_matrix, raw_dicts = HealthcareFeatureExtractor.build_matrix(records)
-
-        # 2. Standardization
-        scaled_matrix = self.scaler.fit_transform(feature_matrix)
-
-        # 3. K-Means Clustering
-        # Handle degenerate case where n_records < n_clusters
+        warnings: List[str] = []
         effective_k = min(self.config.n_clusters, n_records)
-        self.kmeans = KMeans(
-            n_clusters=effective_k,
-            random_state=self.config.random_state,
-            n_init=self.config.n_init,
-            algorithm=self.config.algorithm,
-        )
-        raw_cluster_labels = self.kmeans.fit_predict(scaled_matrix)
 
-        # 4. Semantic Cluster Label Mapping
-        # Map numerical cluster IDs {0, 1} to {"CLUSTER-HIGH", "CLUSTER-LOW"}
-        # Evaluate each cluster's proportion of policy-HIGH records (or physiological deviation if policy unavailable)
-        cluster_high_proportions: Dict[int, float] = {}
-        cluster_mean_deviations: Dict[int, float] = {}
-
+        # 1. Feature Extraction on full batch
+        feature_matrix, raw_dicts = HealthcareFeatureExtractor.build_matrix(records)
         dev_idx = HealthcareFeatureExtractor.FEATURE_NAMES.index("physiological_range_deviation")
 
-        for c_id in range(effective_k):
-            mask = (raw_cluster_labels == c_id)
-            c_records = [records[i] for i, m in enumerate(mask) if m]
-            if len(c_records) > 0:
-                high_count = sum(1 for r in c_records if getattr(r, "sensitivity", None) == SensitivityLevel.HIGH)
-                cluster_high_proportions[c_id] = high_count / len(c_records)
-                cluster_mean_deviations[c_id] = float(np.mean(feature_matrix[mask, dev_idx]))
-            else:
-                cluster_high_proportions[c_id] = 0.0
-                cluster_mean_deviations[c_id] = 0.0
+        # 2. Defensible Calibration / Evaluation Protocol Split
+        use_held_out = (n_records >= 10 and 0.1 <= calibration_ratio <= 0.9 and effective_k == 2)
+        held_out_agreement: Optional[float] = None
+        held_out_confusion: Optional[Dict[str, int]] = None
+        cal_count: Optional[int] = None
+        eval_count: Optional[int] = None
 
-        # Deterministic semantic assignment
-        cluster_mapping: Dict[str, str] = {}
-        if effective_k == 2:
-            p0 = cluster_high_proportions.get(0, 0.0)
-            p1 = cluster_high_proportions.get(1, 0.0)
-            if p0 > p1:
+        if use_held_out:
+            cal_count = max(4, int(n_records * calibration_ratio))
+            eval_count = n_records - cal_count
+
+            # Calibration partition (training)
+            cal_matrix = feature_matrix[:cal_count]
+            cal_records = records[:cal_count]
+
+            # Fit scaler and KMeans ONLY on calibration partition
+            scaled_cal_matrix = self.scaler.fit_transform(cal_matrix)
+            self.kmeans = KMeans(
+                n_clusters=effective_k,
+                random_state=self.config.random_state,
+                n_init=self.config.n_init,
+                algorithm=self.config.algorithm,
+            )
+            cal_labels = self.kmeans.fit_predict(scaled_cal_matrix)
+
+            # Determine semantic mapping purely on calibration data
+            cal_devs: Dict[int, float] = {}
+            for c_id in range(effective_k):
+                mask = (cal_labels == c_id)
+                cal_devs[c_id] = float(np.mean(cal_matrix[mask, dev_idx])) if np.any(mask) else 0.0
+
+            d0 = cal_devs.get(0, 0.0)
+            d1 = cal_devs.get(1, 0.0)
+            dev_separation = abs(d0 - d1)
+
+            cluster_mapping: Dict[str, str] = {}
+            if dev_separation < 0.05:
+                warnings.append(
+                    f"Semantic mapping uncertainty: centroid physiological deviation separation is narrow "
+                    f"(|d0 - d1| = {dev_separation:.4f} < 0.05). Inferred semantic polarity may be sensitive to noise."
+                )
+
+            if d0 >= d1:
                 cluster_mapping["0"] = "CLUSTER-HIGH"
                 cluster_mapping["1"] = "CLUSTER-LOW"
-            elif p1 > p0:
+            else:
                 cluster_mapping["1"] = "CLUSTER-HIGH"
                 cluster_mapping["0"] = "CLUSTER-LOW"
-            else:
-                # Tie-breaking rule: Cluster with higher average physiological range deviation is CLUSTER-HIGH
-                d0 = cluster_mean_deviations.get(0, 0.0)
-                d1 = cluster_mean_deviations.get(1, 0.0)
+
+            # Held-out evaluation using frozen scaler, frozen kmeans, and frozen mapping
+            eval_matrix = feature_matrix[cal_count:]
+            eval_records = records[cal_count:]
+            scaled_eval_matrix = self.scaler.transform(eval_matrix)
+            eval_labels = self.kmeans.predict(scaled_eval_matrix)
+
+            held_out_confusion = {
+                "true_high_as_high": 0,
+                "true_low_as_low": 0,
+                "high_as_low_mismatch": 0,
+                "low_as_high_upgrade": 0,
+            }
+            eval_correct = 0
+            for idx, rec in enumerate(eval_records):
+                c_id = int(eval_labels[idx])
+                c_label = cluster_mapping[str(c_id)]
+                policy_sens = rec.sensitivity or SensitivityLevel.LOW
+
+                if policy_sens == SensitivityLevel.HIGH:
+                    if c_label == "CLUSTER-HIGH":
+                        held_out_confusion["true_high_as_high"] += 1
+                        eval_correct += 1
+                    else:
+                        held_out_confusion["high_as_low_mismatch"] += 1
+                else:
+                    if c_label == "CLUSTER-LOW":
+                        held_out_confusion["true_low_as_low"] += 1
+                        eval_correct += 1
+                    else:
+                        held_out_confusion["low_as_high_upgrade"] += 1
+
+            held_out_agreement = round(eval_correct / max(1, eval_count), 4)
+
+            # Transform the complete batch with the calibration-fitted scaler & model
+            scaled_matrix = self.scaler.transform(feature_matrix)
+            raw_cluster_labels = self.kmeans.predict(scaled_matrix)
+
+        else:
+            # Exploratory fitting on full dataset (e.g. small sample N < 10)
+            scaled_matrix = self.scaler.fit_transform(feature_matrix)
+            self.kmeans = KMeans(
+                n_clusters=effective_k,
+                random_state=self.config.random_state,
+                n_init=self.config.n_init,
+                algorithm=self.config.algorithm,
+            )
+            raw_cluster_labels = self.kmeans.fit_predict(scaled_matrix)
+
+            # Inferred semantic mapping from full batch centroids
+            cluster_devs: Dict[int, float] = {}
+            for c_id in range(effective_k):
+                mask = (raw_cluster_labels == c_id)
+                cluster_devs[c_id] = float(np.mean(feature_matrix[mask, dev_idx])) if np.any(mask) else 0.0
+
+            cluster_mapping = {}
+            if effective_k == 2:
+                d0 = cluster_devs.get(0, 0.0)
+                d1 = cluster_devs.get(1, 0.0)
+                if abs(d0 - d1) < 0.05:
+                    warnings.append(
+                        "Semantic mapping uncertainty: centroid physiological deviation separation is narrow (< 0.05)."
+                    )
                 if d0 >= d1:
                     cluster_mapping["0"] = "CLUSTER-HIGH"
                     cluster_mapping["1"] = "CLUSTER-LOW"
                 else:
                     cluster_mapping["1"] = "CLUSTER-HIGH"
                     cluster_mapping["0"] = "CLUSTER-LOW"
-        else:
-            # Single cluster fallback
-            cluster_mapping["0"] = "CLUSTER-HIGH" if cluster_high_proportions.get(0, 0.0) > 0.5 else "CLUSTER-LOW"
+            else:
+                cluster_mapping["0"] = "CLUSTER-HIGH"
 
-        # 5. Apply Security Guardrail & Annotate Records
+        # 3. Apply Security Guardrail & Annotate Records
         feature_vectors: List[FeatureVector] = []
         guardrail_overrides = 0
-        confusion = {
+        within_run_confusion = {
             "true_high_as_high": 0,
             "true_low_as_low": 0,
             "high_as_low_mismatch": 0,
@@ -214,20 +340,20 @@ class KMeansPipeline:
                 override = True
                 reason = "Policy guardrail enforced: Clinical HIGH record protected against K-Means cluster downgrade"
                 guardrail_overrides += 1
-                confusion["high_as_low_mismatch"] += 1
+                within_run_confusion["high_as_low_mismatch"] += 1
             elif c_label == "CLUSTER-HIGH":
                 effective_sec = SensitivityLevel.HIGH
                 override = False
                 reason = None
                 if policy_sens == SensitivityLevel.HIGH:
-                    confusion["true_high_as_high"] += 1
+                    within_run_confusion["true_high_as_high"] += 1
                 else:
-                    confusion["low_as_high_upgrade"] += 1
+                    within_run_confusion["low_as_high_upgrade"] += 1
             else:  # CLUSTER-LOW and policy LOW
                 effective_sec = SensitivityLevel.LOW
                 override = False
                 reason = None
-                confusion["true_low_as_low"] += 1
+                within_run_confusion["true_low_as_low"] += 1
 
             # Update record in-place with complete traceability fields
             rec.pipeline_run_id = pipeline_run_id
@@ -255,7 +381,7 @@ class KMeansPipeline:
                 )
             )
 
-        # 6. Compute Comprehensive Diagnostics
+        # 4. Compute Comprehensive Diagnostics
         cluster_counts = {str(c_id): int(np.sum(raw_cluster_labels == c_id)) for c_id in range(effective_k)}
         semantic_counts = {
             "CLUSTER-HIGH": sum(1 for r in records if r.cluster_label == "CLUSTER-HIGH"),
@@ -281,10 +407,12 @@ class KMeansPipeline:
         # Calculate Silhouette Score safely
         sil_score: Optional[float] = None
         sil_note: Optional[str] = None
-        warnings: List[str] = []
 
         if effective_k < self.config.n_clusters:
-            warnings.append(f"Dataset size ({n_records}) is smaller than requested clusters ({self.config.n_clusters}); adjusted effective K to {effective_k}.")
+            warnings.append(
+                f"Dataset size ({n_records}) is smaller than requested clusters ({self.config.n_clusters}); "
+                f"adjusted effective K to {effective_k}."
+            )
 
         if effective_k > 1 and n_records > effective_k:
             unique_rows = np.unique(scaled_matrix, axis=0)
@@ -307,15 +435,21 @@ class KMeansPipeline:
             if n_records > 20 and (count / n_records) < 0.05:
                 warnings.append(f"Cluster {c_id} is heavily imbalanced ({count}/{n_records} records).")
 
-        # Agreement ratio between semantic K-Means cluster and independent policy
-        correct_matches = confusion["true_high_as_high"] + confusion["true_low_as_low"]
-        agreement_ratio = round(correct_matches / max(1, n_records), 4)
+        # Within-run agreement ratio with synthetic rule-based sensitivity labels
+        correct_matches = within_run_confusion["true_high_as_high"] + within_run_confusion["true_low_as_low"]
+        within_run_agreement_ratio = round(correct_matches / max(1, n_records), 4)
 
         if guardrail_overrides > 0:
             warnings.append(
                 f"Security guardrail intervened for {guardrail_overrides} record(s): "
                 "prevented K-Means from downgrading clinical HIGH records."
             )
+
+        protocol_str = (
+            f"CALIBRATION_HELD_OUT_EVALUATION (Calibration: {cal_count}, Held-out: {eval_count})"
+            if use_held_out
+            else f"WITHIN_RUN_EXPLORATORY (N={n_records})"
+        )
 
         diagnostics = KMeansDiagnostics(
             n_samples=n_records,
@@ -328,8 +462,20 @@ class KMeansPipeline:
             inertia=round(float(self.kmeans.inertia_), 4),
             silhouette_score=sil_score,
             silhouette_note=sil_note,
-            agreement_ratio=agreement_ratio,
-            confusion_matrix=confusion,
+            agreement_metric_label="within-run agreement with synthetic rule-based sensitivity labels",
+            agreement_ratio=within_run_agreement_ratio,
+            within_run_agreement_ratio=within_run_agreement_ratio,
+            evaluation_protocol=protocol_str,
+            calibration_sample_count=cal_count,
+            held_out_sample_count=eval_count,
+            held_out_agreement_ratio=held_out_agreement,
+            held_out_confusion_matrix=held_out_confusion,
+            semantic_mapping_method="centroid_physiological_deviation",
+            limitations_note=(
+                "Within-run agreement measures alignment with synthetic rule-based heuristic labels; "
+                "this does NOT represent independent clinical diagnostic accuracy or real-world generalization."
+            ),
+            confusion_matrix=within_run_confusion,
             guardrail_overrides_count=guardrail_overrides,
             warnings=warnings,
         )

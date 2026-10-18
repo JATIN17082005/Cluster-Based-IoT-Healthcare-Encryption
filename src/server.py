@@ -509,7 +509,7 @@ def export_pipeline_stage_csv(stage: str):
             writer.writerow([r.record_id, r.timestamp, r.demo_patient_id, r.record_type.value, r.value, r.unit, r.is_synthetic, r.pipeline_run_id or run_id])
         filename = f"stage1_raw_dataset_{run_id}.csv"
     elif stage_key in ["features", "stage2", "stage2_features"]:
-        writer.writerow(["record_id", "type_heart_rate", "type_ecg_summary", "type_temperature", "type_step_count", "raw_measurement", "physiological_range_deviation", "pipeline_run_id"])
+        writer.writerow(["record_id", "type_heart_rate", "type_ecg_summary", "type_temperature", "type_step_count", "modality_normalized_value", "physiological_range_deviation", "raw_measurement", "pipeline_run_id"])
         for fv in current_feature_vectors:
             writer.writerow([
                 fv.record_id,
@@ -517,8 +517,9 @@ def export_pipeline_stage_csv(stage: str):
                 fv.features.get("type_ecg_summary", 0.0),
                 fv.features.get("type_temperature", 0.0),
                 fv.features.get("type_step_count", 0.0),
-                fv.features.get("raw_measurement", 0.0),
+                fv.features.get("modality_normalized_value", 0.0),
                 fv.features.get("physiological_range_deviation", 0.0),
+                fv.features.get("raw_measurement", 0.0),
                 run_id,
             ])
         filename = f"stage2_features_{run_id}.csv"
@@ -616,15 +617,28 @@ def get_energy_model_details():
             "has_hardware_aes": False,
         },
         "battery_specification": {
+            "cell_nominal_voltage_v": mcu_config.battery_cell_nominal_voltage_v,
+            "regulated_rail_voltage_v": mcu_config.supply_voltage_v,
             "nominal_capacity_mah": mcu_config.battery_nominal_mah,
             "nominal_capacity_ah": mcu_config.battery_nominal_mah / 1000.0,
             "usable_capacity_factor": mcu_config.battery_usable_factor,
             "usable_capacity_mah": mcu_config.battery_nominal_mah * mcu_config.battery_usable_factor,
+            "cell_total_energy_joules": round((mcu_config.battery_nominal_mah / 1000.0) * 3600.0 * mcu_config.battery_cell_nominal_voltage_v, 2),
+            "cell_usable_energy_joules": round((mcu_config.battery_nominal_mah / 1000.0) * 3600.0 * mcu_config.battery_cell_nominal_voltage_v * mcu_config.battery_usable_factor, 2),
             "usable_energy_joules": round(
                 (mcu_config.battery_nominal_mah / 1000.0) * 3600.0 * mcu_config.supply_voltage_v * mcu_config.battery_usable_factor,
                 2
             ),
-            "voltage_reference_explanation": "Model assumes battery terminal voltage is regulated by a low-dropout (LDO) or buck converter to 3.3V system rail.",
+            "rail_delivered_energy_joules": round(
+                (mcu_config.battery_nominal_mah / 1000.0) * 3600.0 * mcu_config.supply_voltage_v * mcu_config.battery_usable_factor,
+                2
+            ),
+            "ldo_efficiency_factor": mcu_config.ldo_efficiency_factor,
+            "voltage_reference_explanation": (
+                "Distinguishes 1S Li-Po electrochemical cell (3.7V nominal, 13,586.40 J usable @ 85% DoD) "
+                "from the regulated 3.3V MCU operating rail. Stepping down via a linear LDO (efficiency 3.3V / 3.7V ≈ 89.2%) "
+                "delivers 12,117.60 J to the 3.3V rail. Operating currents are measured at the 3.3V rail boundary."
+            ),
         },
         "mathematical_formulas": {
             "power_w": "P = V x I (Voltage in Volts x Current in Amperes)",

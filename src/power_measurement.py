@@ -83,7 +83,15 @@ class BasePowerAdapter(ABC):
 
 
 class HardwareSerialPowerAdapter(BasePowerAdapter):
-    """Hardware adapter for dedicated serial power meters or INA219 current sensors."""
+    """Hardware serial power adapter interface / placeholder for dedicated power meters (e.g. Monsoon / Otii / INA219).
+
+    Academic Disclosure:
+    This class defines the software adapter contract for streaming real-time electrical telemetry
+    from physical hardware over a serial/COM interface.
+    Live physical serial acquisition requires an attached hardware instrument. In the current release,
+    physical laboratory power measurements are supported via CSVPowerImporter (/api/power/import).
+    This class serves as an interface placeholder and does NOT manufacture synthetic hardware data.
+    """
 
     def __init__(self, port: Optional[str] = None, baudrate: int = 115200):
         self.port = port
@@ -95,8 +103,12 @@ class HardwareSerialPowerAdapter(BasePowerAdapter):
 
     def start_sampling(self):
         if not self.port:
-            raise ConnectionError("No hardware power sensor COM port configured.")
-        # In a real attached meter, open serial connection and begin reader thread
+            raise ConnectionError(
+                "No hardware power sensor COM port configured. "
+                "Physical serial streaming requires an attached hardware instrument. "
+                "For empirical power validation, import laboratory instrument CSV logs via /api/power/import."
+            )
+        # Dedicated hardware meter connection hook
         self.is_connected = True
         self._samples_v.clear()
         self._samples_i_ma.clear()
@@ -118,7 +130,12 @@ class HardwareSerialPowerAdapter(BasePowerAdapter):
             "source": MeasurementSource.HARDWARE.value,
             "instrument": f"Serial Sensor on {self.port or 'NONE'}",
             "device_boundary": "IoT Device Supply Boundary (VCC to GND)",
-            "description": "Physical current/voltage sensor reading",
+            "status": "INTERFACE_PLACEHOLDER_HARDWARE_PENDING",
+            "methodology": "Hardware Pending (Serial INA219/INA226/Oscilloscope probe interface)",
+            "description": (
+                "Hardware serial adapter interface. Live hardware connection is pending attached instrument; "
+                "use /api/power/import to load physical laboratory power logs."
+            ),
         }
 
 
@@ -516,6 +533,20 @@ class McuEnergyModel:
             "provenance_label": provenance_label_str,
             "provenance_disclaimer": provenance_disclaimer_str,
             "duty_cycle_info": duty_cycle_info,
+            "battery_accounting": {
+                "cell_nominal_voltage_v": cfg.battery_cell_nominal_voltage_v,
+                "regulated_rail_voltage_v": cfg.supply_voltage_v,
+                "cell_total_energy_joules": round((cfg.battery_nominal_mah / 1000.0) * 3600.0 * cfg.battery_cell_nominal_voltage_v, 2),
+                "cell_usable_energy_joules": round((cfg.battery_nominal_mah / 1000.0) * 3600.0 * cfg.battery_cell_nominal_voltage_v * cfg.battery_usable_factor, 2),
+                "rail_delivered_usable_energy_joules": round((cfg.battery_nominal_mah / 1000.0) * 3600.0 * cfg.supply_voltage_v * cfg.battery_usable_factor, 2),
+                "rail_usable_energy_joules": round((cfg.battery_nominal_mah / 1000.0) * 3600.0 * cfg.supply_voltage_v * cfg.battery_usable_factor, 2),
+                "ldo_efficiency_factor": cfg.ldo_efficiency_factor,
+                "voltage_reference_explanation": (
+                    "Currents are measured at the 3.3V regulated MCU rail boundary. "
+                    "A 1200 mAh 1S Li-Po cell (3.7V nominal, 13,586.40 J usable @ 85% DoD) "
+                    "delivers 12,117.60 J through a 3.3V linear regulator (efficiency 3.3V/3.7V ≈ 89.2%)."
+                ),
+            },
             "radio_sensitivity_sweep": radio_sensitivity_sweep,
             "record_count": n,
             "high_sensitivity_count": n_high,

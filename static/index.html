@@ -343,7 +343,7 @@
           <div><strong>Seed:</strong> <span id="meta-seed" style="color:#fff;font-weight:700;">42</span></div>
           <div><strong>Generated Records:</strong> <span id="meta-total-count" style="color:var(--status-success);font-weight:700;">0</span></div>
           <div><strong>Timestamp:</strong> <span id="meta-timestamp" style="color:var(--text-muted);">&mdash;</span></div>
-          <div><strong>K-Means Agreement:</strong> <span id="meta-kmeans-agreement" style="color:var(--brand-cyan);font-weight:700;">&mdash;</span></div>
+          <div><strong>Within-Run Rule Agreement:</strong> <span id="meta-kmeans-agreement" style="color:var(--brand-cyan);font-weight:700;" title="Within-run agreement with synthetic rule-based sensitivity labels (not independent clinical accuracy)">&mdash;</span></div>
           <div><strong>Guardrail Overrides:</strong> <span id="meta-guardrail-overrides" style="color:var(--status-danger);font-weight:700;">0</span></div>
         </div>
 
@@ -1264,11 +1264,11 @@
               <div style="background:var(--bg-surface-2);border:1px solid rgba(16,185,129,0.3);border-radius:var(--radius-sm);padding:0.75rem 0.9rem;">
                 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.35rem;">
                   <span class="badge badge-low" style="font-size:0.7rem;">TIER 3: BENCHTOP LAB</span>
-                  <span style="font-size:0.7rem;color:var(--text-muted);">Physical Current Sensor</span>
+                  <span style="font-size:0.7rem;color:var(--text-muted);">Calibrated Instrument CSV</span>
                 </div>
                 <div style="font-size:0.8rem;font-weight:600;color:#fff;margin-bottom:0.25rem;">INSTRUMENT_MEASURED_LAB</div>
                 <p style="font-size:0.74rem;color:var(--text-secondary);margin:0;line-height:1.4;">
-                  Direct laboratory acquisition via high-speed shunt resistor, Otii Arc, or INA219 current sensor. Supports CSV power import with trapezoidal numerical integration ($P = V \times I$).
+                  Laboratory measurement supported via external CSV power import (<code>/api/power/import</code>) from instruments like Monsoon Power Monitor or Otii Arc with trapezoidal numerical integration (E = &int; V&middot;I dt). Direct serial streaming adapter is an interface placeholder pending attached hardware.
                 </p>
               </div>
             </div>
@@ -1278,14 +1278,15 @@
               <!-- Formula 1: Usable Battery Joules -->
               <div style="background:var(--bg-surface-2);border:1px solid var(--border-subtle);border-radius:var(--radius-sm);padding:0.75rem 0.9rem;">
                 <div style="font-size:0.75rem;font-weight:600;color:var(--brand-cyan);margin-bottom:0.3rem;">
-                  Battery Usable Energy Derivation (1200 mAh Nominal)
+                  Battery Energy: Cell vs. Regulated Rail Derivation
                 </div>
-                <div style="font-family:var(--font-mono);font-size:0.78rem;background:var(--bg-app);padding:0.45rem 0.65rem;border-radius:4px;border:1px solid rgba(255,255,255,0.06);margin-bottom:0.35rem;color:#e2e8f0;">
-                  E<sub>usable</sub> = C<sub>nom</sub> &times; &eta;<sub>usable</sub> &times; V<sub>cc</sub> &times; 3600 / 1000<br>
-                  E<sub>usable</sub> = 1,200 mAh &times; 0.85 &times; 3.3 V &times; 3.6 = <strong>12,117.60 Joules</strong>
+                <div style="font-family:var(--font-mono);font-size:0.76rem;background:var(--bg-app);padding:0.45rem 0.65rem;border-radius:4px;border:1px solid rgba(255,255,255,0.06);margin-bottom:0.35rem;color:#e2e8f0;line-height:1.45;">
+                  1S Li-Po Cell (3.7V nom): 1,200 mAh &times; 3.7 V &times; 3.6 = <strong>15,984.00 J</strong><br>
+                  Cell Usable (85% DoD): 15,984 J &times; 0.85 = <strong>13,586.40 J</strong><br>
+                  Regulated 3.3V Rail Usable: 1,200 mAh &times; 0.85 &times; 3.3 V &times; 3.6 = <strong>12,117.60 Joules</strong>
                 </div>
                 <div style="font-size:0.72rem;color:var(--text-muted);">
-                  *85% usable factor (&eta;<sub>usable</sub> = 0.85) accounts for LDO regulator dropout voltage and low-voltage lithium-ion cut-off (1,020.0 mAh usable).
+                  *Model currents are measured at the regulated 3.3V rail. Stepping down 3.7V cell via linear LDO (&eta; = 3.3/3.7 &approx; 89.2%) delivers 12,117.60 J usable to the MCU rail.
                 </div>
               </div>
 

@@ -53,10 +53,81 @@ def test_feature_extractor_all_modalities():
     assert len(dict_list) == 20
 
     for d in dict_list:
-        assert len(d) == len(HealthcareFeatureExtractor.FEATURE_NAMES)
+        for f in HealthcareFeatureExtractor.FEATURE_NAMES:
+            assert f in d
+        assert "modality_normalized_value" in d
+        assert "raw_measurement" in d
+        assert 0.0 <= d["modality_normalized_value"] <= 1.0
         for val in d.values():
             assert not np.isnan(val)
             assert not np.isinf(val)
+
+
+def test_modality_specific_normalization_invariance():
+    """Verify that modality-specific normalization maps each modality to [0, 1] relative to physical span."""
+    hr_rec = SensorRecord(
+        record_id="REC-HR",
+        timestamp="2026-10-13T10:00:00Z",
+        demo_patient_id="PAT-1",
+        record_type=RecordType.HEART_RATE,
+        value=75.0,  # (75 - 30) / (220 - 30) = 45 / 190 ≈ 0.2368
+        unit="bpm",
+    )
+    temp_rec = SensorRecord(
+        record_id="REC-TEMP",
+        timestamp="2026-10-13T10:00:00Z",
+        demo_patient_id="PAT-1",
+        record_type=RecordType.TEMPERATURE,
+        value=37.0,  # (37 - 34) / (42 - 34) = 3 / 8 = 0.375
+        unit="°C",
+    )
+    ecg_rec = SensorRecord(
+        record_id="REC-ECG",
+        timestamp="2026-10-13T10:00:00Z",
+        demo_patient_id="PAT-1",
+        record_type=RecordType.ECG_SUMMARY,
+        value=1.5,  # (1.5 - 0) / (3 - 0) = 0.5
+        unit="mV",
+    )
+    step_rec = SensorRecord(
+        record_id="REC-STEP",
+        timestamp="2026-10-13T10:00:00Z",
+        demo_patient_id="PAT-1",
+        record_type=RecordType.STEP_COUNT,
+        value=50.0,  # (50 - 0) / (200 - 0) = 0.25
+        unit="steps",
+    )
+
+    f_hr = HealthcareFeatureExtractor.extract_features(hr_rec)
+    f_temp = HealthcareFeatureExtractor.extract_features(temp_rec)
+    f_ecg = HealthcareFeatureExtractor.extract_features(ecg_rec)
+    f_step = HealthcareFeatureExtractor.extract_features(step_rec)
+
+    assert abs(f_hr["modality_normalized_value"] - (45.0 / 190.0)) < 1e-4
+    assert abs(f_temp["modality_normalized_value"] - 0.375) < 1e-4
+    assert abs(f_ecg["modality_normalized_value"] - 0.5) < 1e-4
+    assert abs(f_step["modality_normalized_value"] - 0.25) < 1e-4
+
+
+def test_calibration_and_held_out_evaluation_protocol():
+    """Verify that K-Means fits only on calibration data and evaluates on held-out data using frozen mapping."""
+    gen = SyntheticDataGenerator(seed=42)
+    classifier = SensitivityClassifier()
+    records = gen.generate_batch(count=60, classifier=classifier)
+
+    pipeline = KMeansPipeline(KMeansConfig(n_clusters=2, random_state=42))
+    result, _ = pipeline.fit_and_cluster(records, pipeline_run_id="PIPE-CAL-TEST", calibration_ratio=0.5)
+
+    diag = result.diagnostics
+    assert "CALIBRATION_HELD_OUT_EVALUATION" in diag.evaluation_protocol
+    assert diag.calibration_sample_count == 30
+    assert diag.held_out_sample_count == 30
+    assert diag.held_out_agreement_ratio is not None
+    assert 0.0 <= diag.held_out_agreement_ratio <= 1.0
+    assert diag.held_out_confusion_matrix is not None
+    assert diag.agreement_metric_label == "within-run agreement with synthetic rule-based sensitivity labels"
+    assert "within_run_agreement_ratio" in diag.model_dump()
+
 
 
 def test_kmeans_pipeline_fit_and_clusters():

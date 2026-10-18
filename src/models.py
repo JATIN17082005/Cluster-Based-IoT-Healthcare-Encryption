@@ -80,7 +80,7 @@ class KMeansConfig(BaseModel):
 
 
 class KMeansDiagnostics(BaseModel):
-    """Mathematical and security diagnostic metrics for K-Means clustering run."""
+    """Mathematical, evaluation protocol, and security diagnostic metrics for K-Means clustering run."""
     n_samples: int
     n_features: int
     feature_names: List[str]
@@ -91,7 +91,22 @@ class KMeansDiagnostics(BaseModel):
     inertia: float
     silhouette_score: Optional[float] = None
     silhouette_note: Optional[str] = None
-    agreement_ratio: float
+
+    # Defensible evaluation protocol and explicit labeling
+    agreement_metric_label: str = "within-run agreement with synthetic rule-based sensitivity labels"
+    agreement_ratio: float  # Maintained for backward compatibility (= within_run_agreement_ratio)
+    within_run_agreement_ratio: float = 0.0
+    evaluation_protocol: str = "CALIBRATION_HELD_OUT_EVALUATION"
+    calibration_sample_count: Optional[int] = None
+    held_out_sample_count: Optional[int] = None
+    held_out_agreement_ratio: Optional[float] = None
+    held_out_confusion_matrix: Optional[Dict[str, int]] = None
+    semantic_mapping_method: str = "centroid_physiological_deviation"
+    limitations_note: str = (
+        "Evaluated against synthetic rule-based policy labels; "
+        "does not constitute independent clinical or generalization validation."
+    )
+
     confusion_matrix: Dict[str, int]
     guardrail_overrides_count: int
     warnings: List[str] = Field(default_factory=list)
@@ -168,7 +183,9 @@ class PowerSample(BaseModel):
 
 class PowerModelConfig(BaseModel):
     """Configurable parameters for software energy estimation."""
-    supply_voltage_v: float = 3.3
+    battery_cell_nominal_voltage_v: float = 3.7  # 1S Li-Po cell nominal voltage
+    supply_voltage_v: float = 3.3                # Regulated MCU rail voltage
+    ldo_efficiency_factor: float = 0.8919        # Theoretical LDO efficiency (3.3V / 3.7V)
     idle_current_ma: float = 12.0
     active_mcu_current_ma: float = 35.0
     aes_crypto_current_ma: float = 54.0
@@ -184,8 +201,10 @@ class McuHardwareScenarioConfig(BaseModel):
     Models a bare-metal edge MCU without hardware AES acceleration (e.g. ARM Cortex-M0+ or AVR @ 16 MHz).
     """
     mcu_model_name: str = "ARM Cortex-M0+ (16 MHz, No AES Hardware)"
-    supply_voltage_v: float = 3.3
-    mcu_clock_hz: float = 16_000_000.0  # Configurable MCU CPU clock (default 16 MHz)
+    battery_cell_nominal_voltage_v: float = 3.7  # 1S Li-Po cell nominal voltage (3.0V - 4.2V operating range)
+    supply_voltage_v: float = 3.3                # Regulated MCU operating rail voltage
+    ldo_efficiency_factor: float = 0.8919        # Theoretical linear LDO step-down efficiency (V_rail / V_cell = 3.3 / 3.7)
+    mcu_clock_hz: float = 16_000_000.0          # Configurable MCU CPU clock (default 16 MHz)
     battery_nominal_mah: float = 1200.0
     battery_usable_factor: float = 0.85
 

@@ -471,6 +471,7 @@ document.addEventListener("DOMContentLoaded", () => {
             <td>${f.type_ecg_summary ?? 0}</td>
             <td>${f.type_temperature ?? 0}</td>
             <td>${f.type_step_count ?? 0}</td>
+            <td>${f.modality_normalized_value !== undefined ? Number(f.modality_normalized_value).toFixed(2) : '&mdash;'}</td>
             <td>${f.raw_measurement !== undefined ? Number(f.raw_measurement).toFixed(1) : '&mdash;'}</td>
             <td>${f.physiological_range_deviation !== undefined ? Number(f.physiological_range_deviation).toFixed(2) : '&mdash;'}</td>
           </tr>
@@ -478,21 +479,22 @@ document.addEventListener("DOMContentLoaded", () => {
       }).join('');
 
       drawerStagePreview.innerHTML = `
-        <div style="font-size:0.75rem;font-weight:600;margin-bottom:0.35rem;color:var(--text-secondary);">Standardized Feature Vectors (First 6 of ${(pipelineAllFeatures || []).length})</div>
+        <div style="font-size:0.75rem;font-weight:600;margin-bottom:0.35rem;color:var(--text-secondary);">Modality-Aware Feature Vectors (First 6 of ${(pipelineAllFeatures || []).length})</div>
         <table class="data-table" style="font-size:0.72rem;margin:0;">
-          <thead><tr><th>Record ID</th><th>HR</th><th>ECG</th><th>Temp</th><th>Step</th><th>Raw</th><th>Dev</th></tr></thead>
+          <thead><tr><th>Record ID</th><th>HR</th><th>ECG</th><th>Temp</th><th>Step</th><th>Norm</th><th>Raw</th><th>Dev</th></tr></thead>
           <tbody>${previewRows}</tbody>
         </table>`;
 
       drawerStageDiagnostics.innerHTML = `
-        <div><strong>Feature Dimensionality:</strong> 6 engineered features</div>
-        <div><strong>Normalization:</strong> StandardScaler (z = (x - &mu;) / &sigma;)</div>
+        <div><strong>Feature Dimensionality:</strong> 6 engineered features (4 one-hot + modality-norm + physio-dev)</div>
+        <div><strong>Modality Scaling:</strong> Normalized into [0.0, 1.0] per sensor type's physical span</div>
+        <div><strong>Standardization:</strong> StandardScaler (z = (x - &mu;) / &sigma;) on dimensionless inputs</div>
         <div><strong>Label Leakage:</strong> <span style="color:var(--status-success);font-weight:700;">0% (ISOLATED)</span></div>
-        <div style="font-size:0.72rem;color:var(--text-muted);margin-top:0.3rem;">Sensitivity classifications are completely excluded from the feature matrix.</div>`;
+        <div style="font-size:0.72rem;color:var(--text-muted);margin-top:0.3rem;">Ground-truth sensitivity policy labels are strictly excluded from the feature matrix.</div>`;
     } else if (stepNum === 3) {
       const diag = pipelineDiagnostics || {};
       const centroids = diag.unscaled_centroids || [];
-      const featureNames = ["Heart Rate", "ECG ST", "Temperature", "Step Count", "Raw Value", "Physio Dev"];
+      const featureNames = ["Heart Rate", "ECG ST", "Temperature", "Step Count", "Modality Norm", "Physio Dev"];
       
       let centroidHtml = "";
       if (centroids.length >= 2) {
@@ -519,12 +521,21 @@ document.addEventListener("DOMContentLoaded", () => {
 
       const silScore = diag.silhouette_score !== undefined ? diag.silhouette_score.toFixed(3) : '&mdash;';
       const inertia = diag.inertia !== undefined ? diag.inertia.toFixed(2) : '&mdash;';
+      const protocol = diag.evaluation_protocol || "Calibration/Held-Out";
+      const calCount = diag.calibration_sample_count !== undefined && diag.calibration_sample_count !== null ? diag.calibration_sample_count : '&mdash;';
+      const evalCount = diag.held_out_sample_count !== undefined && diag.held_out_sample_count !== null ? diag.held_out_sample_count : '&mdash;';
+      const heldOutText = diag.held_out_agreement_ratio !== undefined && diag.held_out_agreement_ratio !== null
+        ? `${(diag.held_out_agreement_ratio * 100).toFixed(1)}%`
+        : 'N/A';
 
       drawerStageDiagnostics.innerHTML = `
         <div><strong>Algorithm:</strong> scikit-learn Lloyd (K=2, n_init=10)</div>
+        <div><strong>Evaluation Protocol:</strong> <span style="font-size:0.73rem;color:var(--text-secondary);">${protocol}</span></div>
+        <div><strong>Calibration Split:</strong> ${calCount} samples | <strong>Held-Out:</strong> ${evalCount} samples</div>
+        <div><strong>Held-Out Eval Agreement:</strong> <span style="color:var(--status-success);font-weight:700;">${heldOutText}</span></div>
         <div><strong>Silhouette Score:</strong> <span style="color:var(--brand-cyan);font-weight:700;">${silScore}</span></div>
         <div><strong>Model Inertia (WCSS):</strong> ${inertia}</div>
-        <div><strong>Convergence:</strong> Verified in 10 initializations</div>`;
+        <div style="font-size:0.7rem;color:var(--text-muted);margin-top:0.3rem;">Scaler and KMeans fitted on calibration data only; evaluated on held-out split using frozen semantic mapping.</div>`;
     } else if (stepNum === 4) {
       const previewRows = pipelineAllRecords.slice(0, 6).map(r => {
         const isOverride = !!r.policy_override;
@@ -548,15 +559,15 @@ document.addEventListener("DOMContentLoaded", () => {
         </table>`;
 
       const diag = pipelineDiagnostics || {};
-      const ratio = diag.agreement_ratio !== undefined ? diag.agreement_ratio : (diag.agreement_with_policy_rate || 0);
+      const ratio = diag.within_run_agreement_ratio !== undefined ? diag.within_run_agreement_ratio : (diag.agreement_ratio !== undefined ? diag.agreement_ratio : (diag.agreement_with_policy_rate || 0));
       const agreement = (ratio * 100).toFixed(1);
       const overrides = diag.guardrail_overrides_count !== undefined ? diag.guardrail_overrides_count : (diag.guardrail_overrides_applied || 0);
 
       drawerStageDiagnostics.innerHTML = `
-        <div><strong>Policy Agreement Rate:</strong> <span style="color:var(--brand-cyan);font-weight:700;">${agreement}%</span></div>
+        <div><strong>Within-Run Rule Agreement:</strong> <span style="color:var(--brand-cyan);font-weight:700;">${agreement}%</span></div>
         <div><strong>Clinical Guardrail Overrides:</strong> <span style="color:var(--status-danger);font-weight:700;">${overrides}</span></div>
         <div><strong>Safety Guarantee:</strong> Clinical HIGH records are never downgraded to LOW</div>
-        <div style="font-size:0.72rem;color:var(--text-muted);margin-top:0.3rem;">If K-Means clusters an emergency vital with routine data, the guardrail forces NIST AES-256-GCM encryption.</div>`;
+        <div style="font-size:0.72rem;color:var(--text-muted);margin-top:0.3rem;">Within-run agreement with synthetic rule-based sensitivity labels (not independent clinical accuracy). If K-Means clusters an emergency vital with routine data, the guardrail forces NIST AES-256-GCM encryption.</div>`;
     } else if (stepNum === 5) {
       const highCount = pipelineAllRecords.filter(r => r.effective_security_class === "HIGH").length;
       const lowCount = pipelineAllRecords.length - highCount;

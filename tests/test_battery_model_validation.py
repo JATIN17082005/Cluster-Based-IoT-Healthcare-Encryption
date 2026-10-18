@@ -112,3 +112,60 @@ def test_evidence_hierarchy_separation(client):
     assert tiers["A"]["badge"] == "DESKTOP_MEASURED_HOST"
     assert tiers["B"]["badge"] == "MODELED_ESTIMATED_MCU"
     assert tiers["C"]["badge"] == "INSTRUMENT_MEASURED_LAB"
+
+
+def test_battery_cell_vs_rail_accounting(client):
+    """Verify the physical distinction between 3.7V cell capacity and 3.3V regulated rail capacity."""
+    resp = client.get("/api/battery/energy-model")
+    assert resp.status_code == 200
+    bat = resp.json()["battery_specification"]
+
+    # 1S Li-Po electrochemical cell specs
+    assert bat["cell_nominal_voltage_v"] == 3.7
+    assert bat["regulated_rail_voltage_v"] == 3.3
+    assert bat["nominal_capacity_mah"] == 1200.0
+    assert bat["usable_capacity_factor"] == 0.85
+
+    # Cell total energy: 1.2 Ah * 3.7 V * 3600 s = 15984.0 J
+    assert math.isclose(bat["cell_total_energy_joules"], 15984.0, rel_tol=1e-3)
+    # Cell usable energy at 85% DoD: 15984.0 * 0.85 = 13586.40 J
+    assert math.isclose(bat["cell_usable_energy_joules"], 13586.40, rel_tol=1e-3)
+
+    # LDO step-down efficiency: 3.3 / 3.7 ~ 0.8919
+    assert math.isclose(bat["ldo_efficiency_factor"], 3.3 / 3.7, rel_tol=1e-3)
+
+    # Rail delivered energy: 13586.40 J * (3.3 / 3.7) = 12117.60 J
+    assert math.isclose(bat["usable_energy_joules"], 12117.60, rel_tol=1e-3)
+    assert math.isclose(
+        bat["usable_energy_joules"],
+        bat["cell_usable_energy_joules"] * bat["ldo_efficiency_factor"],
+        rel_tol=1e-3,
+    )
+
+    # Also verify calculate_scenario includes battery_accounting metadata
+    cfg = McuHardwareScenarioConfig()
+    model = McuEnergyModel(cfg)
+    res = model.calculate_scenario(
+        total_records=100,
+        high_sensitivity_count=45,
+        low_sensitivity_count=55,
+    )
+    assert "battery_accounting" in res
+    acc = res["battery_accounting"]
+    assert acc["cell_nominal_voltage_v"] == 3.7
+    assert acc["regulated_rail_voltage_v"] == 3.3
+    assert acc["rail_usable_energy_joules"] == 12117.60
+
+
+def test_hardware_adapter_placeholder_provenance():
+    """Verify that HardwareSerialPowerAdapter exposes its placeholder status and throws safe ConnectionError."""
+    from src.power_measurement import HardwareSerialPowerAdapter
+
+    adapter = HardwareSerialPowerAdapter(port=None)
+    prov = adapter.get_provenance()
+    assert prov["status"] == "INTERFACE_PLACEHOLDER_HARDWARE_PENDING"
+    assert "Hardware Pending" in prov["methodology"]
+
+    with pytest.raises(ConnectionError, match="No hardware power sensor"):
+        adapter.start_sampling()
+

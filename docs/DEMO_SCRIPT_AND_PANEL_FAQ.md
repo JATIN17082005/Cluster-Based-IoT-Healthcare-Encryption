@@ -12,15 +12,15 @@
 * **Presenter points to screen:**
   > "Notice what happens automatically:
   > 1. Our deterministic generator produces 50 synthetic records across cardiac, thermal, and activity modalities with a globally unique `pipeline_run_id`.
-  > 2. Our `HealthcareFeatureExtractor` constructs a 6-dimensional normalized feature vector per record with zero label leakage—ground-truth sensitivity is never exposed to the ML algorithm.
-  > 3. `sklearn.cluster.KMeans` automatically clusters the records into `CLUSTER-HIGH` and `CLUSTER-LOW` with ~96% agreement against clinical thresholds.
+  > 2. Our `HealthcareFeatureExtractor` constructs a 6-dimensional feature vector per record using modality-aware physical span normalization (mapping values to $[0.0, 1.0]$) and continuous physiological deviations. Ground-truth sensitivity labels are strictly excluded—zero label leakage.
+  > 3. `sklearn.cluster.KMeans` trains on a calibration partition and evaluates on a separate held-out partition, reporting **Within-Run Rule Agreement** (~96%) against synthetic clinical thresholds.
   > 4. Notice the **Metadata Ribbon** and our **Clinical Safety Guardrail**: if an abnormal reading—such as an arrhythmia or fever—is clustered into a routine group, our safety guardrail immediately intervenes, forcing `effective_security_class = HIGH` (AES-256-GCM) with an immutable audit log.
   > 5. Down below, our **Synthetic Healthcare Dataset & Provenance Lineage** table displays all 11 columns: Record ID, Modality, Raw Measurement, Timestamps, Policy Sensitivity, ML Cluster, Guardrail Overrides, and Nonce/Tag previews. We can search, filter by modality or security class, and download full CSV/JSON artifacts for all 7 stages."
 
 ### Step 3: Interactive Pipeline Drawer Inspection (45 Seconds)
 * **Action in UI:** Click on **Step 02 (Feature Engineering)** and **Step 03 (ML Clustering)** in the 7-Stage Pipeline strip.
 * **Presenter demonstrates:**
-  > "Clicking any stage opens our slide-out **Stage Inspection Drawer**. Here we can inspect the exact intermediate dataset: for Stage 02, we view the 6D normalized feature vectors; for Stage 03, we inspect K-Means diagnostics including silhouette score, inertia, iterations to converge, and cluster centroids."
+  > "Clicking any stage opens our slide-out **Stage Inspection Drawer**. Here we can inspect the exact intermediate dataset: for Stage 02, we view the 6D normalized feature vectors with modality spans; for Stage 03, we inspect K-Means diagnostics including calibration/held-out counts, silhouette score, inertia, iterations to converge, and cluster centroids."
 
 ### Step 4: Paired Benchmark Execution & Desktop Regression Analysis (1 Minute)
 * **Action in UI:** Click **Run Both / Compare**.
@@ -33,9 +33,9 @@
 ### Step 5: Battery Lab & Sub-Panel G Evidence Audit (45 Seconds)
 * **Action in UI:** Navigate to Tab 2 (*Comparison & Battery Lab*). Switch scenario to **Constrained IoT Microcontroller (Simulated Target MCU)**. Select **Compute-Intensive / Short-TX** preset. Scroll down to **Sub-Panel G**.
 * **Presenter shows result:**
-  > "In an IoT microcontroller lacking AES-NI (e.g. ARM Cortex-M0+ @ 16 MHz), software AES takes ~20,000 cycles, while lightweight XOR takes ~10,000 cycles.
+  > "In an IoT microcontroller lacking AES-NI (e.g. ARM Cortex-M0+ @ 16 MHz), software AES takes 20,000 cycles (1.25 ms), while the composite SHA-256 + XOR + HMAC routine takes 10,240 cycles (0.64 ms)—a 48.8% reduction in cryptographic CPU cycles.
   > Under **Sub-Panel G**, we provide our 3-tier evidence hierarchy and authoritative battery math:
-  > - A 1200 mAh Li-Po cell at 3.3V with 85% usable depth-of-discharge provides exactly **12,117.60 Joules**.
+  > - A 1200 mAh 1S Li-Po cell (3.7V nominal, 15,984 J total, 13,586.40 J usable) delivers **12,117.60 Joules** to the 3.3V regulated MCU rail at ~89.2% linear LDO efficiency.
   > - Energy is calculated strictly over **non-overlapping, mutually exclusive activity intervals**: $3.3\,\text{V} \times 10\,\text{mA} \times 1\,\text{ms} = 0.033\,\text{mJ}$.
   > - With short radio airtime (0.5 ms), adaptive encryption predicts **~12.9% batch energy savings**."
 
@@ -60,14 +60,14 @@
 > **Answer:** **No, absolutely not.** Target leakage occurs when the target variable or its direct derivatives are included in the feature set.
 > Our feature extractor strictly takes only raw physiological values (`sensor_type`, `measurement`, `unit`) and calculates baseline deviations from population medical norms. The sensitivity label (`sensitivity` or `policy_sensitivity`) is strictly excluded. This is verified by automated unit tests (`test_feature_extractor_no_label_leakage`).
 
-### Q4: How is the 12,117.60 Joule battery capacity derived?
-> **Answer:** The capacity is derived from basic electrical engineering principles:
-> $$\text{Energy} = C_{\text{nominal}} \times k_{\text{usable}} \times V_{\text{rail}} \times 3.6$$
-> - $1200\,\text{mAh}$: Standard rechargeable 1S lithium-polymer pouch cell.
-> - $3.3\,\text{V}$: Regulated microcontroller rail voltage.
-> - $3.6$: Conversion constant ($1\,\text{mAh} \times 1\,\text{V} = 3.6\,\text{Joules}$).
-> - $0.85$ ($85\%$): Usable capacity factor enforcing a standard Depth-of-Discharge (DoD) margin to prevent irreversible lithium cell damage.
-> $$1200 \times 0.85 \times 3.3 \times 3.6 = 12,117.60\,\text{Joules}$$
+### Q4: How is the 12,117.60 Joule battery capacity derived, and how does it relate to cell voltage?
+> **Answer:** The capacity accounts for the physical boundary between the 1S Li-Po electrochemical cell and the regulated MCU rail:
+> 1. **Cell Source Energy (3.7V Nominal):** A standard 1200 mAh Li-Po cell holds:
+>    $$E_{\text{cell, total}} = 1.2\,\text{Ah} \times 3.7\,\text{V} \times 3600\,\text{s/h} = 15,984.00\,\text{Joules}$$
+>    At an 85% safe Depth-of-Discharge (DoD) margin, usable cell energy is $15,984.00 \times 0.85 = 13,586.40\,\text{Joules}$.
+> 2. **Delivered Rail Energy (3.3V Regulated):** Stepping down from 3.7V to 3.3V via an on-board linear low-dropout regulator (LDO) operates at efficiency $\eta = 3.3 / 3.7 \approx 89.19\%$:
+>    $$E_{\text{rail, usable}} = 13,586.40\,\text{J} \times \left(\frac{3.3}{3.7}\right) = 1.2\,\text{Ah} \times 3.3\,\text{V} \times 3600 \times 0.85 = 12,117.60\,\text{Joules}$$
+> All microcontroller current draws are measured/modeled at this 3.3V regulated rail boundary.
 
 ### Q5: How do you guarantee energy is not double-counted between CPU, crypto, and radio?
 > **Answer:** We formulate the energy model over **strictly non-overlapping, mutually exclusive time intervals**:
@@ -79,11 +79,12 @@
 > In ClusterGuard, the XOR route is implemented strictly as an **algorithmic lower-bound baseline** to evaluate the theoretical computational savings proposed in academic literature. The attached HMAC-SHA-256 provides message authentication only. Production devices must utilize authenticated AEAD ciphers (e.g., AES-256-GCM or ChaCha20-Poly1305).
 
 ### Q7: Why did your desktop test show that AES-256-GCM was faster than the lightweight route?
-> **Answer:** Modern x86-64 desktop processors include **Intel/AMD AES-NI** hardware instructions. Python's `cryptography` library uses OpenSSL, which executes AES in dedicated silicon cycles. In contrast, the experimental XOR cipher is implemented in pure Python bytecode with HMAC-SHA-256 integrity verification, incurring interpreter loop overhead. On constrained edge microcontrollers lacking AES-NI hardware (such as ARM Cortex-M0+), software AES requires ~20,000 clock cycles, while bitwise XOR requires ~160 cycles.
+> **Answer:** Modern x86-64 desktop processors include **Intel/AMD AES-NI** hardware instructions. Python's `cryptography` library uses OpenSSL, which executes AES in dedicated silicon cycles. In contrast, the experimental XOR cipher is implemented in pure Python bytecode with HMAC-SHA-256 integrity verification, incurring interpreter loop overhead. On constrained edge microcontrollers lacking AES-NI hardware (such as ARM Cortex-M0+), software AES requires 20,000 clock cycles (1.25 ms), while the composite SHA+XOR+HMAC routine requires 10,240 clock cycles (0.64 ms).
 
 ### Q8: Did you physically measure battery savings?
 > **Answer:** We do not claim verified physical battery savings on this workstation. The UI explicitly displays the badge `SIMULATED / ESTIMATED — NOT A PHYSICAL BATTERY READING`.
-> To validate real battery savings, the platform provides a **CSV Instrument Importer** and a modular **Hardware Power Adapter interface**. A research team can connect a Monsoon Power Monitor or Otii Arc to an actual IoT microcontroller board, capture current waveforms, and import the log to integrate true physical energy.
+> The `HardwareSerialPowerAdapter` class provides a defined interface (`INTERFACE_PLACEHOLDER_HARDWARE_PENDING`) that cleanly raises a `ConnectionError` directing users to CSV laboratory log imports when physical hardware is not attached.
+> To validate real battery savings, the platform provides a **CSV Instrument Importer** (`/api/power/import`) and a numerical trapezoidal integration engine. A research team can connect a Monsoon Power Monitor or Otii Arc to an actual IoT microcontroller board, capture current waveforms, and import the log to integrate true physical energy.
 
 ### Q9: How does the system protect against replay attacks and nonce reuse?
 > **Answer:** Reusing a nonce with the same key in AES-256-GCM is catastrophic (it leaks the authentication hash key). Our `AES256GCMService` generates a cryptographically fresh 96-bit (12-byte) pseudo-random nonce for every envelope using `secrets.token_bytes(12)` and tracks used nonces in memory to prevent reuse. The experimental path uses fresh 12-byte IVs with SHA-256 keystream expansion.

@@ -2,7 +2,7 @@
 
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/Backend-FastAPI-009688.svg)](https://fastapi.tiangolo.com/)
-[![Tests](https://img.shields.io/badge/Tests-79%2F79%20Passing-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/Tests-83%2F83%20Passing-brightgreen.svg)]()
 [![scikit-learn](https://img.shields.io/badge/ML-scikit--learn%20K--Means-orange.svg)](https://scikit-learn.org/)
 [![License](https://img.shields.io/badge/License-Academic%20Research-lightgrey.svg)]()
 
@@ -152,29 +152,39 @@ flowchart TD
 ### Why Machine Learning Clustering?
 While simple if/else rules can evaluate scalar vitals, clinical wearable monitoring produces multi-dimensional physiological signals (heart rate, ECG rhythm characteristics, core temperature, and movement kinematics). ClusterGuard incorporates an unsupervised **scikit-learn K-Means clustering pipeline** to automatically group telemetry into natural physiological clusters based on multidimensional feature geometry.
 
-### Physiological Feature Engineering (`HealthcareFeatureExtractor`)
+### Modality-Aware Feature Engineering (`HealthcareFeatureExtractor`)
 The pipeline transforms raw incoming telemetry into a 6-dimensional feature space without target leakage:
 
-$$\mathbf{x} = \begin{bmatrix} f_{\text{hr}} & f_{\text{ecg}} & f_{\text{temp}} & f_{\text{steps}} & x_{\text{raw}} & \Delta_{\text{physio}} \end{bmatrix}^T$$
+$$\mathbf{x} = \begin{bmatrix} f_{\text{hr}} & f_{\text{ecg}} & f_{\text{temp}} & f_{\text{steps}} & x_{\text{norm}} & \Delta_{\text{physio}} \end{bmatrix}^T$$
 
 | Feature Dimension | Extraction Definition | Purpose & Normalization |
 |---|---|---|
-| `type_heart_rate` | One-hot binary indicator ($1.0$ if Heart Rate, $0.0$ otherwise) | Separates cardiac pulse modality |
-| `type_ecg_summary` | One-hot binary indicator ($1.0$ if ECG waveform summary, $0.0$ otherwise) | Separates electrical cardiac waveform |
-| `type_temperature` | One-hot binary indicator ($1.0$ if Body Temp, $0.0$ otherwise) | Separates thermal vital signs |
-| `type_step_count` | One-hot binary indicator ($1.0$ if Step Cadence, $0.0$ otherwise) | Separates physical activity telemetry |
-| `raw_measurement` | Continuous scalar measurement (bpm, mV, °C, steps/min) | Captures physical measurement magnitude |
-| `physiological_range_deviation` | Normalized deviation: $\vert x_{\text{raw}} - \text{baseline}\vert / \text{spread}$ | Quantifies distance from healthy resting baseline |
+| `type_heart_rate` | One-hot binary indicator ($1.0$ if Heart Rate, $0.0$ otherwise) | Identifies cardiac pulse modality |
+| `type_ecg_summary` | One-hot binary indicator ($1.0$ if ECG waveform summary, $0.0$ otherwise) | Identifies electrical cardiac waveform |
+| `type_temperature` | One-hot binary indicator ($1.0$ if Body Temp, $0.0$ otherwise) | Identifies thermal vital signs |
+| `type_step_count` | One-hot binary indicator ($1.0$ if Step Cadence, $0.0$ otherwise) | Identifies physical activity telemetry |
+| `modality_normalized_value` | Modality-specific physical span normalization: $(x_{\text{raw}} - \text{min}) / (\text{max} - \text{min}) \in [0.0, 1.0]$ | Prevents scale distortion between incompatible units (e.g., bpm vs °C) |
+| `physiological_range_deviation` | Continuous clinical deviation: $\vert x_{\text{raw}} - \text{midpoint}\vert / (\text{span}/2)$ | Quantifies distance from healthy physiological baseline |
+
+> [!NOTE]
+> For traceability and backward compatibility, the unscaled `raw_measurement` is retained in the exported dataset dictionary, but machine learning clustering uses `modality_normalized_value` to prevent scalar magnitude dominance.
 
 > [!IMPORTANT]
 > **Zero Label Leakage Guarantee:**
-> Ground-truth clinical labels (`sensitivity`, `policy_sensitivity`, or justification strings) are strictly excluded from the feature matrix. Unsupervised clustering operates purely on raw sensor geometry.
+> Ground-truth clinical labels (`sensitivity`, `policy_sensitivity`, or clinical justification strings) are strictly excluded from the feature matrix. Unsupervised clustering operates purely on raw sensor geometry. Input values are validated against NaN and Inf before feature extraction.
 
-### Standardization & K-Means Optimization (`KMeansPipeline`)
-1. **Feature Normalization:** Features are standardized to zero mean and unit variance using `sklearn.preprocessing.StandardScaler` ($\mu = 0, \sigma = 1$), preventing high-magnitude features (such as step counts) from dominating low-magnitude features (such as body temperature).
-2. **K-Means Execution:** Configured with $k=2$ clusters, deterministic seed (`random_state=42`), 10 initialization runs (`n_init=10`), and Lloyd's expectation-maximization algorithm (`algorithm="lloyd"`).
-3. **Deterministic Semantic Mapping:** Unsupervised cluster indices (0 and 1) have arbitrary polarity. ClusterGuard computes the mean physiological severity of each centroid's coordinates to deterministically assign the cluster with higher deviation as `HIGH_SENSITIVITY` and the lower as `LOW_SENSITIVITY`.
-4. **Clustering Diagnostics:** The pipeline computes inertia, iterations to converge, silhouette score, unscaled/scaled centroids, and a confusion matrix comparing ML cluster assignments against clinical ground truth.
+### Standardization, Calibration & Held-Out Evaluation Protocol (`KMeansPipeline`)
+1. **Calibration vs. Held-Out Evaluation Split:**
+   - To avoid circular evaluation, batches of size $N \ge 20$ are split into a **50% Calibration Set** and a **50% Held-Out Evaluation Set**.
+   - `sklearn.preprocessing.StandardScaler` and `sklearn.cluster.KMeans(n_clusters=2, random_state=42, n_init=10)` are fit strictly on the calibration partition.
+2. **Deterministic Semantic Mapping:**
+   - Unsupervised cluster indices (0 and 1) have arbitrary polarity. ClusterGuard computes the mean physiological deviation of each centroid's coordinates on the calibration set to deterministically map the higher-deviation cluster to `HIGH_SENSITIVITY` and the lower to `LOW_SENSITIVITY`.
+   - **Cluster Separation Guard:** If the absolute difference in mean deviation between centroids is marginal ($|\Delta_0 - \Delta_1| < 0.05$), a `narrow_cluster_separation_warning` is raised.
+3. **Rigorous Evaluation Metric Labeling:**
+   - Cluster performance is evaluated on the independent held-out partition and reported under the authoritative label:
+     **`Within-run agreement with synthetic rule-based sensitivity labels`**
+   - **Academic Honesty:** This metric quantifies mathematical agreement between unsupervised feature geometry and synthetic threshold rules. It is **never** presented as clinical diagnostic accuracy or generalized clinical efficacy on human hospital populations.
+4. **Clustering Diagnostics:** The pipeline computes inertia, iterations to converge, silhouette score, unscaled/scaled centroids, confusion matrix, and held-out agreement ratios.
 
 ### The Clinical Safety Guardrail
 In healthcare IoT, an unsupervised machine learning algorithm must **never** be permitted to compromise patient safety or regulatory compliance. An anomalous vitals reading or sensor artifact could theoretically be misclustered into a routine cluster.
@@ -253,17 +263,20 @@ ClusterGuard strictly separates empirical hardware measurements from theoretical
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
-### Authoritative Battery Capacity Derivation
-For an IoT wearable powered by a standard 1200 mAh rechargeable Li-Po 1S pouch cell, the usable energy budget is derived from first principles:
+### Authoritative Battery Capacity & Voltage Reconciliation
+In embedded IoT telemetry nodes, battery capacity calculations must explicitly account for the physical boundary between the electrochemical cell and the regulated microcontroller supply rail:
 
-$$\text{Usable Capacity} = C_{\text{nominal}} \times k_{\text{usable}} \times V_{\text{rail}} \times 3.6$$
-
-$$\text{Capacity} = 1200\,\text{mAh} \times 0.85 \times 3.3\,\text{V} \times 3.6 = 12,117.60\,\text{Joules}$$
-
-- **$1200\,\text{mAh}$:** Nominal cell charge capacity.
-- **$0.85$ ($85\%$):** Usable capacity factor enforcing a safe Depth-of-Discharge (DoD) cutoff margin to prevent irreversible battery degradation.
-- **$3.3\,\text{V}$:** Regulated system operating rail voltage.
-- **$3.6$:** SI conversion constant ($1\,\text{mAh} = 3.6\,\text{Coulombs}$, and $1\,\text{C} \times 1\,\text{V} = 1\,\text{Joule}$).
+1. **1S Lithium-Polymer Electrochemical Cell (Source):**
+   - **Nominal Cell Voltage ($V_{\text{cell}}$):** $3.7\,\text{V}$
+   - **Total Cell Energy:** $1.2\,\text{Ah} \times 3.7\,\text{V} \times 3600\,\text{s/h} = 15,984.00\,\text{Joules}$
+   - **Usable Cell Energy (85% DoD):** $15,984.00\,\text{J} \times 0.85 = 13,586.40\,\text{Joules}$
+2. **Regulated Microcontroller Rail (Measurement Boundary):**
+   - **Regulated Operating Rail ($V_{\text{rail}}$):** $3.3\,\text{V}$
+   - **Linear LDO Step-Down Efficiency:** $\eta_{\text{LDO}} = 3.3\,\text{V} / 3.7\,\text{V} \approx 89.189\% \approx 89.2\%$
+   - **Usable Delivered Rail Energy:**
+     $$E_{\text{rail, usable}} = 1200\,\text{mAh} \times 0.85 \times 3.3\,\text{V} \times 3.6 = 12,117.60\,\text{Joules}$$
+   - **Consistency Check:** $13,586.40\,\text{J} \times (3.3 / 3.7) = 12,117.60\,\text{Joules}$
+   - All microcontroller active, cryptographic, and radio currents are measured/modeled at this $3.3\,\text{V}$ rail boundary.
 
 ### Non-Overlapping Activity Interval Formulation
 Energy is accounted strictly across non-overlapping, mutually exclusive hardware states:
@@ -278,17 +291,20 @@ $$\text{Total Batch Energy: } E_{\text{total}} = \sum_{k} E_k = V_{\text{cc}} \s
 
 - **Mutual Exclusivity:** The CPU executes preprocessing, then cryptographic transformation, then activates the radio transceiver, and finally enters deep sleep. Energy intervals are never stacked or double-counted.
 
-### Hardware Operating Parameters & Named Profiles
+### Hardware Operating Parameters & CPU Cycle Accounting at 16 MHz
+At $16\,\text{MHz}$ clock frequency, $1\,\text{ms} = 16,000$ clock cycles. The model accounts for all operations without coprocessor acceleration:
+
 | Operating State | Current ($I_k$) | Duration ($t_k$) | Clock Cycles @ 16 MHz | Energy per Unit ($E_k$) |
 |---|---|---|---|---|
-| Base CPU Preprocessing | $8.5\,\text{mA}$ | $0.30\,\text{ms}$ | 4,800 cycles | $0.008415\,\text{mJ}$ |
-| Software AES-256-GCM | $9.8\,\text{mA}$ | $1.25\,\text{ms}$ | 20,000 cycles | $0.040425\,\text{mJ}$ |
-| SHA-256 Keystream Expansion | $8.2\,\text{mA}$ | $0.25\,\text{ms}$ | 4,000 cycles | $0.006765\,\text{mJ}$ |
-| Bitwise XOR Cipher | $7.5\,\text{mA}$ | $0.01\,\text{ms}$ | 160 cycles | $0.000248\,\text{mJ}$ |
-| HMAC-SHA-256 Authentication | $8.4\,\text{mA}$ | $0.38\,\text{ms}$ | 6,080 cycles | $0.010534\,\text{mJ}$ |
+| Sensor Preprocessing ($t_{\text{proc}}$) | $8.0\,\text{mA}$ | $0.35\,\text{ms}$ | 5,600 cycles | $0.00924\,\text{mJ}$ |
+| Baseline Software AES-256 | $12.5\,\text{mA}$ | $1.25\,\text{ms}$ | 20,000 cycles | $0.05156\,\text{mJ}$ |
+| SHA-256 Keystream Expansion | $10.5\,\text{mA}$ | $0.40\,\text{ms}$ | 6,400 cycles | $0.01386\,\text{mJ}$ |
+| Bitwise XOR Cipher | $7.5\,\text{mA}$ | $0.09\,\text{ms}$ | 1,440 cycles | $0.00223\,\text{mJ}$ |
+| HMAC-SHA-256 Tag | $10.5\,\text{mA}$ | $0.15\,\text{ms}$ | 2,400 cycles | $0.00520\,\text{mJ}$ |
+| **Composite Routine Path (SHA+XOR+HMAC)** | **$9.61\,\text{mA}$ avg** | **$0.64\,\text{ms}$** | **10,240 cycles** | **$0.02129\,\text{mJ}$** |
 | Radio Transmit (Short TX) | $28.0\,\text{mA}$ | $0.50\,\text{ms}$ | N/A (Transceiver) | $0.046200\,\text{mJ}$ |
 | Radio Transmit (Radio Heavy) | $28.0\,\text{mA}$ | $1.50\,\text{ms}$ | N/A (Transceiver) | $0.138600\,\text{mJ}$ |
-| Deep Sleep State | $5.0\,\mu\text{A}$ | $t_{\text{idle}}$ | N/A (Sleep) | $0.0165\,\mu\text{W} \times t_{\text{idle}}$ |
+| Deep Sleep State | $15.0\,\mu\text{A}$ | $t_{\text{idle}}$ | N/A (Sleep) | $0.0495\,\mu\text{W} \times t_{\text{idle}}$ |
 
 #### Named Target MCU Evaluation Scenarios
 - **Compute-Intensive / Short-TX ($t_{\text{tx}} = 0.50\,\text{ms}$):** Representative of BLE 2 Mbps physical layer. Cryptographic execution accounts for 44% of the energy budget; adaptive routing saves **~12.91%** batch energy.
@@ -298,6 +314,10 @@ $$\text{Total Batch Energy: } E_{\text{total}} = \sum_{k} E_k = V_{\text{cc}} \s
 The Battery Lab includes a configurable visual presentation scale ($80\%$ high contrast, $50\%$, $20\%$, $1\times$) designed for rapid faculty demonstration. The visual percentage drained is computed proportionally:
 $$\text{Visual Level} = 100\% - (\text{Visual Scale} \times \text{Relative Energy Ratio})$$
 This ensures that the animated battery icon clearly demonstrates the relative efficiency gap during a 10-second presentation while leaving all underlying Joule and mAh calculations untouched.
+
+### Physical Measurement vs Hardware Interface Placeholder
+- `HardwareSerialPowerAdapter` provides an explicit interface (`status = "INTERFACE_PLACEHOLDER_HARDWARE_PENDING"`) for serial DAQ meters. Calling `start_sampling()` without an attached meter raises a clear `ConnectionError` directing users to physical CSV import.
+- Mode B physical instrument logs are loaded and validated via `/api/power/import`, providing true trapezoidal integration over measured physical data.
 
 ---
 

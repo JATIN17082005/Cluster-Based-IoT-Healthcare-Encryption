@@ -16,6 +16,8 @@ import os
 import sys
 import json
 import time
+import subprocess
+import urllib.request
 from playwright.sync_api import sync_playwright
 
 if sys.stdout.encoding != 'utf-8':
@@ -27,13 +29,41 @@ if sys.stdout.encoding != 'utf-8':
 
 SCREENSHOT_DIR = r"C:\Users\Jatinp\.gemini\antigravity\brain\216a23d8-eb99-4432-b028-034538522d8e"
 EDGE_EXE = r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
+PORT = 8008
+BASE_URL = f"http://127.0.0.1:{PORT}"
+
+
+def wait_for_server(url, timeout=15):
+    start = time.time()
+    while time.time() - start < timeout:
+        try:
+            with urllib.request.urlopen(f"{url}/api/health", timeout=1) as resp:
+                if resp.status == 200:
+                    return True
+        except Exception:
+            time.sleep(0.5)
+    return False
+
 
 def run_redesign_verification():
     console_logs = []
     page_errors = []
 
-    print("=== Starting ClusterGuard Redesign E2E Browser Verification ===")
-    with sync_playwright() as p:
+    print(f"=== Starting background server on port {PORT} ===")
+    server_process = subprocess.Popen(
+        [sys.executable, "-m", "uvicorn", "src.server:app", "--host", "127.0.0.1", "--port", str(PORT)],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        cwd=r"C:\Cluster based IoT data encryption"
+    )
+
+    try:
+        if not wait_for_server(BASE_URL):
+            raise RuntimeError(f"Server failed to start at {BASE_URL} within 15 seconds")
+        print("   [OK] Server is healthy and responsive.")
+
+        print("=== Starting ClusterGuard Redesign E2E Browser Verification ===")
+        p = sync_playwright().start()
         browser = p.chromium.launch(executable_path=EDGE_EXE, headless=True)
         
         # -------------------------------------------------------------
@@ -46,8 +76,8 @@ def run_redesign_verification():
         page.on("pageerror", lambda err: page_errors.append(str(err)))
 
         # 1. Load Application
-        print("1. Loading ClusterGuard dashboard at http://127.0.0.1:8000 ...")
-        page.goto("http://127.0.0.1:8000", wait_until="networkidle")
+        print(f"1. Loading ClusterGuard dashboard at {BASE_URL} ...")
+        page.goto(BASE_URL, wait_until="networkidle")
         time.sleep(1)
         assert "ClusterGuard" in page.title()
         print("   [OK] Page loaded. Title:", page.title())
@@ -312,12 +342,25 @@ def run_redesign_verification():
         print("12. Testing Mobile Responsive Viewport (375 x 812)...")
         mobile_context = browser.new_context(viewport={"width": 375, "height": 812})
         mobile_page = mobile_context.new_page()
-        mobile_page.goto("http://127.0.0.1:8000", wait_until="networkidle")
+        mobile_page.goto(BASE_URL, wait_until="networkidle")
         time.sleep(1)
         mobile_page.screenshot(path=os.path.join(SCREENSHOT_DIR, "redesign_mobile_view.png"))
         print("   [OK] Mobile viewport loaded and verified without layout overflow.")
 
         browser.close()
+
+    finally:
+        if 'p' in locals():
+            try:
+                p.stop()
+            except Exception:
+                pass
+        print("=== Terminating background server ===")
+        server_process.terminate()
+        try:
+            server_process.wait(timeout=5)
+        except Exception:
+            server_process.kill()
 
     print("\n=== Console Logs Recorded During Session ===")
     for log in console_logs:
@@ -333,5 +376,7 @@ def run_redesign_verification():
 
     print("\n=== All ClusterGuard Redesign E2E Verifications Passed 100%! ===")
 
+
 if __name__ == "__main__":
     run_redesign_verification()
+
