@@ -227,6 +227,57 @@ class McuHardwareScenarioConfig(BaseModel):
     t_duty_cycle_period_ms: float = 20.0 # Nominal packet cycle period for idle interval calculation
 
 
+class PerRecordBatteryEntry(BaseModel):
+    """Detailed energy accounting and cumulative battery drain for a single record."""
+    pipeline_run_id: str
+    record_id: str
+    kmeans_cluster_id: int
+    cluster_label: str
+    effective_security_class: str
+    baseline_algorithm: str
+    adaptive_algorithm: str
+    baseline_energy_joules: float
+    adaptive_energy_joules: float
+    baseline_cumulative_energy_joules: float
+    adaptive_cumulative_energy_joules: float
+    baseline_battery_remaining_percent: float
+    adaptive_battery_remaining_percent: float
+    baseline_crypto_energy_joules: Optional[float] = None
+    adaptive_crypto_energy_joules: Optional[float] = None
+    shared_proc_energy_joules: Optional[float] = None
+    radio_tx_energy_joules: Optional[float] = None
+    idle_sleep_energy_joules: Optional[float] = None
+
+
+class BatterySimulationResult(BaseModel):
+    """Result of running physics-based battery simulation on an active dataset."""
+    pipeline_run_id: str
+    total_records: int
+    high_sensitivity_count: int
+    low_sensitivity_count: int
+    scenario_name: str
+    profile_id: str
+    simulated_repetitions: int = 1
+    simulated_operating_seconds: float
+    cadence_period_ms: float = 20.0
+    starting_capacity_mah: float
+    usable_rail_energy_joules: float
+    baseline_batch_energy_joules: float
+    adaptive_batch_energy_joules: float
+    baseline_total_energy_joules: float
+    adaptive_total_energy_joules: float
+    baseline_final_remaining_percent: float
+    energy_saving_percent: float
+    records: List[PerRecordBatteryEntry]
+    record_count: Optional[int] = None
+    baseline_remaining_pct: Optional[float] = None
+    adaptive_remaining_pct: Optional[float] = None
+    energy_savings_pct: Optional[float] = None
+    battery_nominal_mah: Optional[float] = None
+    duration_batches: Optional[int] = None
+
+
+
 class BatchMetrics(BaseModel):
     """Computed metrics for a single baseline or adaptive run."""
     run_id: str

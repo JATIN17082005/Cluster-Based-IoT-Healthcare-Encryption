@@ -7,42 +7,44 @@
   > "Good morning, professors. Wearable medical devices—such as continuous ECG monitors and smart pulse patches—operate under severe energy constraints. Conventional systems apply uniform heavy encryption like AES-256 to every routine packet, which rapidly depletes the limited battery capacity of microcontrollers.
   > In this project, we evaluate **ClusterGuard: A Cluster-Based Sensitivity-Adaptive Encryption architecture**. We partition patient telemetry using an unsupervised machine-learning K-Means clustering pipeline backed by an immutable Clinical Safety Guardrail: critical diagnostic vitals route through NIST-compliant AES-256-GCM, while routine telemetry routes through an experimental lightweight comparison path."
 
-### Step 2: Synthetic Data Generation, ML Feature Extraction & K-Means Clustering (1.5 Minutes)
-* **Action in UI:** Open Tab 1 (*Overview & Live Demo*). Keep Batch Size = 50, Seed = 42. Click **Generate Synthetic Data**.
+### Step 2: Interactive 3-Button Faculty Demo Workflow — Stage 1: Data Generation (1 Minute)
+* **Action in UI:** Open Tab 1 (*Overview & Live Demo*). Keep Batch Size = 50, Seed = 42. Click **1. Generate Synthetic Data**.
 * **Presenter points to screen:**
-  > "Notice what happens automatically:
-  > 1. Our deterministic generator produces 50 synthetic records across cardiac, thermal, and activity modalities with a globally unique `pipeline_run_id`.
-  > 2. Our `HealthcareFeatureExtractor` constructs a 6-dimensional feature vector per record using modality-aware physical span normalization (mapping values to $[0.0, 1.0]$) and continuous physiological deviations. Ground-truth sensitivity labels are strictly excluded—zero label leakage.
-  > 3. `sklearn.cluster.KMeans` trains on a calibration partition and evaluates on a separate held-out partition, reporting **Within-Run Rule Agreement** (~96%) against synthetic clinical thresholds.
-  > 4. Notice the **Metadata Ribbon** and our **Clinical Safety Guardrail**: if an abnormal reading—such as an arrhythmia or fever—is clustered into a routine group, our safety guardrail immediately intervenes, forcing `effective_security_class = HIGH` (AES-256-GCM) with an immutable audit log.
-  > 5. Down below, our **Synthetic Healthcare Dataset & Provenance Lineage** table displays all 11 columns: Record ID, Modality, Raw Measurement, Timestamps, Policy Sensitivity, ML Cluster, Guardrail Overrides, and Nonce/Tag previews. We can search, filter by modality or security class, and download full CSV/JSON artifacts for all 7 stages."
+  > "Notice what happens immediately upon clicking Button 1:
+  > 1. Our deterministic generator produces 50 raw synthetic records across cardiac, thermal, and activity modalities with a globally unique `pipeline_run_id` (e.g. `PIPE-S42-XXXX`).
+  > 2. The pristine raw telemetry table renders immediately. Notice that cluster IDs and security classes are strictly empty at this stage—no fabricated cluster data exists prior to running ML.
+  > 3. The **Download Raw CSV** button is immediately enabled. We can click it to download the pure raw dataset (`record_id, timestamp, demo_patient_id, record_type, value, unit, is_synthetic, pipeline_run_id`).
+  > 4. Generating a new batch automatically invalidates any downstream clustering or battery state to prevent stale data lineage."
 
-### Step 3: Interactive Pipeline Drawer Inspection (45 Seconds)
-* **Action in UI:** Click on **Step 02 (Feature Engineering)** and **Step 03 (ML Clustering)** in the 7-Stage Pipeline strip.
+### Step 3: Feature Engineering Inspection & Executable ML Model File (45 Seconds)
+* **Action in UI:** Click the view switcher pill **View 2: Feature Engineering Matrix (Stage 2)**. Point to the ML Model Callout card.
+* **Presenter points to screen:**
+  > "Above the table, our **Executable ML Model Source File** callout prominently identifies `src/kmeans_clusterer.py`. This standalone, fully executable file contains our scikit-learn K-Means model, `StandardScaler`, modality-aware physical span normalization, and the `ClinicalSafetyGuardrail`.
+  > On screen, our 6-dimensional feature vector table displays: 4 one-hot modality flags (Heart Rate, ECG, Temperature, Steps), modality-normalized values in $[0.0, 1.0]$, raw measurements, and baseline physiological range deviations. Notice the **Label Isolation** column: ground-truth clinical sensitivity labels are strictly excluded—zero target label leakage."
+
+### Step 4: Run Machine Learning Clustering (Stage 3 & 4) (1 Minute)
+* **Action in UI:** Click **2. Run ML Clustering**.
 * **Presenter demonstrates:**
-  > "Clicking any stage opens our slide-out **Stage Inspection Drawer**. Here we can inspect the exact intermediate dataset: for Stage 02, we view the 6D normalized feature vectors with modality spans; for Stage 03, we inspect K-Means diagnostics including calibration/held-out counts, silhouette score, inertia, iterations to converge, and cluster centroids."
+  > "Clicking Button 2 executes `sklearn.cluster.KMeans` ($K=2$, `random_state=42`, `n_init=10`, `algorithm="lloyd"`):
+  > 1. The model derives semantic cluster mapping (`CLUSTER-HIGH` for elevated vitals, `CLUSTER-LOW` for routine data).
+  > 2. The **Metadata Ribbon** updates with **Within-Run Rule Agreement** (~96.0%) and Silhouette Score (~0.347).
+  > 3. Our **Clinical Safety Guardrail** activates: if any abnormal vital (such as an arrhythmia or fever) is clustered into a routine group, the guardrail immediately overrides it, forcing `effective_security_class = HIGH` (AES-256-GCM) with an immutable audit log.
+  > 4. The **Download Clustered CSV** button is enabled, exporting cluster assignments, semantic tags, and guardrail override reasons."
 
-### Step 4: Paired Benchmark Execution & Desktop Regression Analysis (1 Minute)
-* **Action in UI:** Click **Run Both / Compare**.
-* **Presenter explains:**
-  > "The benchmark executes two paired runs under identical workload conditions:
-  > 1. **Baseline Mode:** Encrypts 100% of records with authenticated AES-256-GCM.
-  > 2. **Adaptive Mode:** High-sensitivity records use AES-256-GCM; routine records use the lightweight XOR path.
-  > Look at the latency metric on this laptop: our dashboard honestly reports `STATUS: REGRESSION`. Why? Because modern x86 desktop processors have silicon-level **AES-NI instructions** that execute AES at hardware speeds via OpenSSL in C, whereas the experimental XOR/HMAC cipher runs in Python bytecode. We do not falsify desktop results to pretend there is a saving on a PC."
-
-### Step 5: Battery Lab & Sub-Panel G Evidence Audit (45 Seconds)
-* **Action in UI:** Navigate to Tab 2 (*Comparison & Battery Lab*). Switch scenario to **Constrained IoT Microcontroller (Simulated Target MCU)**. Select **Compute-Intensive / Short-TX** preset. Scroll down to **Sub-Panel G**.
+### Step 5: Simulate Battery on Current Dataset (Stage 4 & Tab 2) (1 Minute)
+* **Action in UI:** Click **3. Simulate Battery on Current Dataset**, then navigate to Tab 2 (*Battery Lab & Simulation*).
 * **Presenter shows result:**
-  > "In an IoT microcontroller lacking AES-NI (e.g. ARM Cortex-M0+ @ 16 MHz), software AES takes 20,000 cycles (1.25 ms at 9.8 mA, 0.0404 mJ), while the composite SHA-256 + XOR + HMAC routine takes 10,240 cycles (0.64 ms at 8.31 mA avg, 0.0175 mJ)—a 48.8% reduction in cryptographic CPU cycles and a 56.6% reduction in per-operation cryptographic energy on routine records.
-  > Under **Sub-Panel G**, we provide our 3-tier evidence hierarchy and authoritative battery math:
-  > - A 1200 mAh 1S Li-Po cell (3.7V nominal, 15,984 J total, 13,586.40 J usable) delivers **12,117.60 Joules** to the 3.3V regulated MCU rail at ~89.2% linear LDO efficiency.
-  > - Energy is calculated strictly over **non-overlapping, mutually exclusive activity intervals**: $3.3\,\text{V} \times 10\,\text{mA} \times 1\,\text{ms} = 0.033\,\text{mJ}$.
-  > - At the batch level (where radio airtime, sensor preprocessing, and sleep are included), adaptive encryption predicts **~12.91% batch energy savings** for short transmissions (0.5 ms) and **~6.63% savings** for standard IoT radios (1.5 ms)."
+  > "Clicking Button 3 executes our physics-based MCU battery model on the **exact records, count, and effective security classes** of the dataset we just clustered:
+  > 1. Guarded records that were upgraded by the safety guardrail are evaluated under NIST AES-256-GCM energy, ensuring realistic energy accounting.
+  > 2. The table computes per-record energy ($E = V \times I \times t$) over non-overlapping CPU, crypto, radio, and sleep intervals ($3.3\,\text{V} \times 10\,\text{mA} \times 1\,\text{ms} = 0.033\,\text{mJ}$).
+  > 3. Cumulative energy is tracked against our 1200 mAh Li-Po rail capacity (**12,117.60 Joules** usable rail energy), computing exact remaining battery percentages (e.g. 99.999998% per batch).
+  > 4. In Tab 2, our dedicated **Per-Record Battery Simulation Table** displays all 50 simulated records, and we can download the full simulation log via **Download Battery Simulation CSV**."
 
-### Step 6: Security Verification & Conclusion (30 Seconds)
-* **Action in UI:** Navigate to Tab 1, scroll to **Interactive Tamper Rejection Verification**, select `AES-256-GCM`, Mutation Target `Ciphertext`, and click **Execute Tamper Test**.
+### Step 6: Desktop Performance Honesty & Security Verification (45 Seconds)
+* **Action in UI:** Return to Tab 1. Scroll down to **Interactive Tamper Rejection Verification**, select `AES-256-GCM`, Mutation Target `Ciphertext`, and click **Execute Tamper Test**.
 * **Presenter concludes:**
-  > "Flipping a single bit in the ciphertext causes the receiver to immediately reject the payload with `tampering detected`. The same occurs for the XOR path via HMAC-SHA-256. All run history is persisted to SQLite and exportable to CSV and JSON with zero secret key leakage. In conclusion, ClusterGuard provides an academically defensible, transparent, and reproducible framework for evaluating IoT healthcare security."
+  > "Flipping a single bit in the ciphertext causes the receiver to immediately reject the payload with `tampering detected`. The same occurs for the XOR path via HMAC-SHA-256.
+  > On our host PC, the dashboard honestly reports `STATUS: REGRESSION` because x86 desktop CPUs feature hardware AES-NI instructions, whereas on target IoT MCUs (16 MHz Cortex-M0+), adaptive clustering saves ~48.8% CPU cycles and ~56.6% per-operation cryptographic energy. All 7 stages can be inspected and exported with zero key leakage. In conclusion, ClusterGuard provides an academically rigorous, transparent, and reproducible framework for evaluating IoT healthcare security."
 
 ---
 

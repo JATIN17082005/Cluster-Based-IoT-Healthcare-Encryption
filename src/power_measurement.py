@@ -601,3 +601,180 @@ class McuEnergyModel:
             "crypto_cycles_comparison": comp_crypto_cycles,
             "crypto_energy_comparison": comp_crypto_energy,
         }
+
+    def simulate_battery_on_records(
+        self,
+        records: List[Any],
+        pipeline_run_id: str = "PIPE-DEFAULT",
+        repetitions: int = 1,
+        radio_tx_ms_override: Optional[float] = None,
+        profile_name: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Perform authoritative per-record battery simulation and cumulative drain tracking
+        on the exact records of the current pipeline run using the active MCU hardware model.
+        """
+        cfg = self.config
+        if radio_tx_ms_override is not None:
+            cfg = cfg.model_copy(update={"t_radio_tx_ms": float(radio_tx_ms_override)})
+        elif profile_name in ["short_tx", "short"]:
+            cfg = cfg.model_copy(update={"t_radio_tx_ms": 0.50})
+        elif profile_name in ["radio_heavy", "heavy"]:
+            cfg = cfg.model_copy(update={"t_radio_tx_ms": 1.50})
+
+        v = cfg.supply_voltage_v
+        usable_rail_energy_joules = (
+            (cfg.battery_nominal_mah / 1000.0) * 3600.0 * v * cfg.battery_usable_factor
+        )
+
+        # Baseline per-record timing and energy components
+        t_proc_ms = cfg.t_shared_proc_ms
+        t_tx_ms = cfg.t_radio_tx_ms
+        t_crypto_base_ms = cfg.t_aes_gcm_ms
+        t_active_base_ms = t_proc_ms + t_crypto_base_ms + t_tx_ms
+        t_idle_base_ms = max(0.0, cfg.t_duty_cycle_period_ms - t_active_base_ms)
+
+        e_proc_j = v * (cfg.cpu_active_current_ma / 1000.0) * (t_proc_ms / 1000.0)
+        e_tx_j = v * (cfg.radio_tx_current_ma / 1000.0) * (t_tx_ms / 1000.0)
+        e_crypto_base_j = v * (cfg.aes_active_current_ma / 1000.0) * (t_crypto_base_ms / 1000.0)
+        e_idle_base_j = v * (cfg.idle_sleep_current_ma / 1000.0) * (t_idle_base_ms / 1000.0)
+        e_rec_base_j = e_proc_j + e_crypto_base_j + e_tx_j + e_idle_base_j
+
+        # Adaptive routine per-record timing and energy components (SHA-256 + XOR + HMAC)
+        t_sha_ms = cfg.t_sha256_keystream_ms
+        t_xor_ms = cfg.t_xor_stream_ms
+        t_hmac_ms = cfg.t_hmac_sha256_ms
+        t_crypto_routine_ms = t_sha_ms + t_xor_ms + t_hmac_ms
+        t_active_routine_ms = t_proc_ms + t_crypto_routine_ms + t_tx_ms
+        t_idle_routine_ms = max(0.0, cfg.t_duty_cycle_period_ms - t_active_routine_ms)
+
+        e_sha_j = v * (cfg.sha256_active_current_ma / 1000.0) * (t_sha_ms / 1000.0)
+        e_xor_j = v * (cfg.xor_active_current_ma / 1000.0) * (t_xor_ms / 1000.0)
+        e_hmac_j = v * (cfg.hmac_active_current_ma / 1000.0) * (t_hmac_ms / 1000.0)
+        e_crypto_routine_j = e_sha_j + e_xor_j + e_hmac_j
+        e_idle_routine_j = v * (cfg.idle_sleep_current_ma / 1000.0) * (t_idle_routine_ms / 1000.0)
+        e_rec_routine_j = e_proc_j + e_crypto_routine_j + e_tx_j + e_idle_routine_j
+
+        cum_base_j = 0.0
+        cum_adapt_j = 0.0
+        per_record_entries: List[Dict[str, Any]] = []
+        n_high = 0
+        n_routine = 0
+
+        for r in records:
+            rec_id = getattr(r, "record_id", "UNKNOWN-REC")
+            c_id = getattr(r, "kmeans_cluster_id", 0)
+            if c_id is None:
+                c_id = 0
+            c_label = getattr(r, "cluster_label", "CLUSTER-LOW") or "CLUSTER-LOW"
+
+            eff_sec_attr = getattr(r, "effective_security_class", None) or getattr(r, "sensitivity", None) or "LOW"
+            eff_sec_str = eff_sec_attr.value if hasattr(eff_sec_attr, "value") else str(eff_sec_attr)
+
+            is_high = (eff_sec_str.upper() == "HIGH")
+            if is_high:
+                n_high += 1
+                adapt_algo = "AES-256-GCM"
+                adapt_e_crypto = e_crypto_base_j
+                adapt_e_idle = e_idle_base_j
+                adapt_e_rec = e_rec_base_j
+            else:
+                n_routine += 1
+                adapt_algo = "XOR-EXPERIMENTAL"
+                adapt_e_crypto = e_crypto_routine_j
+                adapt_e_idle = e_idle_routine_j
+                adapt_e_rec = e_rec_routine_j
+
+            cum_base_j += e_rec_base_j
+            cum_adapt_j += adapt_e_rec
+
+            base_depletion_pct = (cum_base_j / usable_rail_energy_joules) * 100.0
+            adapt_depletion_pct = (cum_adapt_j / usable_rail_energy_joules) * 100.0
+
+            base_rem_pct = max(0.0, min(100.0, 100.0 - base_depletion_pct))
+            adapt_rem_pct = max(0.0, min(100.0, 100.0 - adapt_depletion_pct))
+
+            per_record_entries.append({
+                "pipeline_run_id": pipeline_run_id,
+                "record_id": rec_id,
+                "kmeans_cluster_id": int(c_id),
+                "cluster_label": c_label,
+                "effective_security_class": eff_sec_str,
+                "baseline_algorithm": "AES-256-GCM",
+                "adaptive_algorithm": adapt_algo,
+                "baseline_energy_joules": round(e_rec_base_j, 8),
+                "adaptive_energy_joules": round(adapt_e_rec, 8),
+                "baseline_cumulative_energy_joules": round(cum_base_j, 8),
+                "adaptive_cumulative_energy_joules": round(cum_adapt_j, 8),
+                "baseline_battery_remaining_percent": round(base_rem_pct, 6),
+                "adaptive_battery_remaining_percent": round(adapt_rem_pct, 6),
+                "baseline_crypto_energy_joules": round(e_crypto_base_j, 8),
+                "adaptive_crypto_energy_joules": round(adapt_e_crypto, 8),
+                "shared_proc_energy_joules": round(e_proc_j, 8),
+                "radio_tx_energy_joules": round(e_tx_j, 8),
+                "idle_sleep_energy_joules": round(adapt_e_idle, 8),
+            })
+
+        reps = max(1, repetitions)
+        total_base_j = cum_base_j * reps
+        total_adapt_j = cum_adapt_j * reps
+
+        final_base_rem = max(0.0, min(100.0, 100.0 - (total_base_j / usable_rail_energy_joules) * 100.0))
+        final_adapt_rem = max(0.0, min(100.0, 100.0 - (total_adapt_j / usable_rail_energy_joules) * 100.0))
+
+        delta_energy = total_base_j - total_adapt_j
+        pct_saving = (delta_energy / total_base_j) * 100.0 if total_base_j > 0 else 0.0
+
+        packet_cadence_ms = cfg.t_duty_cycle_period_ms
+        sim_duration_s = reps * (len(records) * packet_cadence_ms / 1000.0)
+
+        # Profile naming
+        if abs(cfg.t_radio_tx_ms - 0.50) < 0.05:
+            prof_id = "short_tx"
+            prof_name = "Compute-Intensive / Short-Transmission MCU Scenario (0.50 ms Radio TX)"
+        elif abs(cfg.t_radio_tx_ms - 1.50) < 0.05:
+            prof_id = "radio_heavy"
+            prof_name = "Radio-Heavy MCU Model (1.50 ms Radio TX)"
+        else:
+            prof_id = "custom"
+            prof_name = f"Custom MCU Configuration ({cfg.t_radio_tx_ms:.2f} ms Radio TX)"
+
+        return {
+            "pipeline_run_id": pipeline_run_id,
+            "total_records": len(records),
+            "high_sensitivity_count": n_high,
+            "low_sensitivity_count": n_routine,
+            "scenario_name": prof_name,
+            "profile_id": prof_id,
+            "simulated_repetitions": reps,
+            "simulated_operating_seconds": round(sim_duration_s, 2),
+            "cadence_period_ms": packet_cadence_ms,
+            "reporting_frequency_hz": round(1000.0 / packet_cadence_ms, 2),
+            "starting_capacity_mah": cfg.battery_nominal_mah,
+            "usable_capacity_mah": round(cfg.battery_nominal_mah * cfg.battery_usable_factor, 2),
+            "usable_rail_energy_joules": round(usable_rail_energy_joules, 2),
+            "baseline_batch_energy_joules": round(cum_base_j, 8),
+            "adaptive_batch_energy_joules": round(cum_adapt_j, 8),
+            "baseline_total_energy_joules": round(total_base_j, 8),
+            "adaptive_total_energy_joules": round(total_adapt_j, 8),
+            "baseline_final_remaining_percent": round(final_base_rem, 4),
+            "adaptive_final_remaining_percent": round(final_adapt_rem, 4),
+            "energy_saving_percent": round(pct_saving, 2),
+            "record_count": len(records),
+            "baseline_remaining_pct": round(final_base_rem, 4),
+            "adaptive_remaining_pct": round(final_adapt_rem, 4),
+            "energy_savings_pct": round(pct_saving, 2),
+            "battery_nominal_mah": cfg.battery_nominal_mah,
+            "duration_batches": reps,
+            "derivation_formula": (
+                "Energy (J) = Voltage (3.3V) x Current (A) x Duration (s). "
+                "Depletion % = (Cumulative Energy / 12,117.60 J) x 100. "
+                "Remaining % = 100.0% - Depletion %."
+            ),
+            "cadence_disclaimer": (
+                f"Physical energy model assumes periodic {1000.0 / packet_cadence_ms:.0f} Hz reporting "
+                f"({packet_cadence_ms:.1f} ms period) with MCU sleep ({cfg.idle_sleep_current_ma*1000:.0f} µA). "
+                "Generated timestamps represent record indices and human timeline readability."
+            ),
+            "records": per_record_entries,
+        }
+

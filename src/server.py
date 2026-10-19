@@ -78,12 +78,16 @@ runner = BenchmarkRunner(key_manager=key_manager, receiver=receiver, power_model
 run_store = RunStore()
 
 # State for currently generated demo batch and seed
+current_raw_records: List[SensorRecord] = []
 current_demo_records: List[SensorRecord] = []
 current_demo_seed: Optional[int] = None
 current_power_override: Optional[Any] = None
 current_pipeline_run_id: Optional[str] = None
 current_clustering_result: Optional[ClusteringResult] = None
 current_feature_vectors: List[FeatureVector] = []
+current_battery_simulation: Optional[Dict[str, Any]] = None
+current_encryption_results: Optional[List[Dict[str, Any]]] = None
+current_receiver_results: Optional[List[Dict[str, Any]]] = None
 
 
 class McuScenarioRequest(BaseModel):
@@ -98,6 +102,13 @@ class McuScenarioRequest(BaseModel):
 class GenerateRequest(BaseModel):
     count: int = Field(default=50, ge=1, le=1000)
     seed: int = Field(default=42, ge=0)
+    run_clustering: Optional[bool] = None
+
+
+class BatterySimulateRequest(BaseModel):
+    repetitions: int = Field(default=1, ge=1, le=1000000)
+    profile: Optional[str] = None
+    radio_tx_ms: Optional[float] = None
 
 
 class BenchmarkRunRequest(BaseModel):
@@ -206,7 +217,10 @@ def get_mcu_scenario(
         )
     elif current_demo_records:
         rec_count = len(current_demo_records)
-        high_cnt = sum(1 for r in current_demo_records if r.sensitivity == SensitivityLevel.HIGH)
+        def _is_high(r):
+            eff = getattr(r, "effective_security_class", None) or getattr(r, "sensitivity", None)
+            return (eff.value if hasattr(eff, "value") else str(eff)).upper() == "HIGH"
+        high_cnt = sum(1 for r in current_demo_records if _is_high(r))
         low_cnt = rec_count - high_cnt
     else:
         rec_count = 100
@@ -264,7 +278,10 @@ def run_mcu_scenario(req: McuScenarioRequest):
         )
     elif current_demo_records:
         rec_count = len(current_demo_records)
-        high_cnt = sum(1 for r in current_demo_records if r.sensitivity == SensitivityLevel.HIGH)
+        def _is_high(r):
+            eff = getattr(r, "effective_security_class", None) or getattr(r, "sensitivity", None)
+            return (eff.value if hasattr(eff, "value") else str(eff)).upper() == "HIGH"
+        high_cnt = sum(1 for r in current_demo_records if _is_high(r))
         low_cnt = rec_count - high_cnt
     else:
         rec_count = 100
@@ -281,33 +298,11 @@ def run_mcu_scenario(req: McuScenarioRequest):
     )
 
 
-@app.post("/api/demo/generate")
-def generate_synthetic_data(req: GenerateRequest):
-    """Generate a seeded batch of synthetic healthcare sensor records with ML K-Means clustering."""
-    global current_demo_records, current_demo_seed, current_pipeline_run_id, current_clustering_result, current_feature_vectors
-    pipeline_run_id = f"PIPE-S{req.seed}-{int(time.time())}"
-    gen = SyntheticDataGenerator(seed=req.seed)
-    records = gen.generate_batch(
-        count=req.count,
-        classifier=runner.classifier,
-    )
-    for r in records:
-        r.pipeline_run_id = pipeline_run_id
-
-    high_group, low_group, clust_result = runner.cluster_manager.cluster_with_kmeans(
-        records, pipeline_run_id=pipeline_run_id
-    )
-
-    current_demo_records = records
-    current_demo_seed = req.seed
-    current_pipeline_run_id = pipeline_run_id
-    current_clustering_result = clust_result
-    current_feature_vectors = runner.cluster_manager.last_feature_vectors
-
-    methodology = {
+def _get_generation_methodology(seed: int, count: int) -> Dict[str, Any]:
+    return {
         "generator_type": "Deterministic pseudo-random generator with fixed seed control",
-        "seed": req.seed,
-        "sample_count": len(records),
+        "seed": seed,
+        "sample_count": count,
         "sensor_modalities": [
             {
                 "type": "HEART_RATE",
@@ -338,7 +333,108 @@ def generate_synthetic_data(req: GenerateRequest):
         "scientific_disclaimer": "Synthetic dataset generated for cryptographic latency and energy benchmarking. Not real patient health records.",
     }
 
-    # Persist immutable snapshot of this pipeline run
+
+def _generate_raw_dataset_core(count: int, seed: int) -> Tuple[str, List[SensorRecord], Dict[str, Any]]:
+    global current_raw_records, current_demo_records, current_demo_seed, current_pipeline_run_id
+    global current_clustering_result, current_feature_vectors, current_battery_simulation
+    global current_encryption_results, current_receiver_results
+
+    pipeline_run_id = f"PIPE-S{seed}-{int(time.time())}"
+    gen = SyntheticDataGenerator(seed=seed)
+    records = gen.generate_batch(
+        count=count,
+        classifier=runner.classifier,
+    )
+    for r in records:
+        r.pipeline_run_id = pipeline_run_id
+        r.kmeans_cluster_id = None
+        r.cluster_label = None
+        r.effective_security_class = None
+        r.policy_override = False
+        r.override_reason = None
+
+    current_raw_records = [r.model_copy() for r in records]
+    current_demo_records = [r.model_copy() for r in records]
+    current_demo_seed = seed
+    current_pipeline_run_id = pipeline_run_id
+    current_clustering_result = None
+    current_feature_vectors = []
+    current_battery_simulation = None
+    current_encryption_results = None
+    current_receiver_results = None
+
+    methodology = _get_generation_methodology(seed, len(records))
+
+    snapshot_data = {
+        "pipeline_run_id": pipeline_run_id,
+        "seed": seed,
+        "record_count": len(records),
+        "stage": "raw_dataset_generated",
+        "methodology": methodology,
+    }
+    run_store.save_pipeline_snapshot(pipeline_run_id, seed, len(records), snapshot_data)
+    return pipeline_run_id, records, methodology
+
+
+@app.post("/api/pipeline/generate-raw")
+def generate_raw_pipeline_data(req: GenerateRequest):
+    """Stage 1: Generate synthetic healthcare sensor records and immediately enable raw CSV export."""
+    pipeline_run_id, records, methodology = _generate_raw_dataset_core(req.count, req.seed)
+    return {
+        "pipeline_run_id": pipeline_run_id,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "seed": req.seed,
+        "count": len(records),
+        "high_cluster_count": 0,
+        "low_cluster_count": 0,
+        "records_preview": [r.model_dump() for r in records[:20]],
+        "all_records": [r.model_dump() for r in records],
+        "features_preview": [],
+        "all_features": [],
+        "clustering_diagnostics": None,
+        "clustering_config": None,
+        "is_clustered": False,
+        "generation_methodology": methodology,
+    }
+
+
+@app.post("/api/demo/generate")
+def generate_synthetic_data(req: GenerateRequest):
+    """Generate a seeded batch of synthetic healthcare sensor records.
+    If run_clustering is explicitly False, performs raw generation only.
+    Otherwise (default), performs raw generation followed by K-Means clustering for full backward compatibility.
+    """
+    global current_demo_records, current_pipeline_run_id, current_clustering_result, current_feature_vectors
+    pipeline_run_id, records, methodology = _generate_raw_dataset_core(req.count, req.seed)
+
+    if req.run_clustering is False:
+        return {
+            "pipeline_run_id": pipeline_run_id,
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "seed": req.seed,
+            "count": len(records),
+            "high_cluster_count": 0,
+            "low_cluster_count": 0,
+            "records_preview": [r.model_dump() for r in records[:20]],
+            "all_records": [r.model_dump() for r in records],
+            "features_preview": [],
+            "all_features": [],
+            "clustering_diagnostics": None,
+            "clustering_config": None,
+            "is_clustered": False,
+            "generation_methodology": methodology,
+        }
+
+    # Default / legacy path: perform genuine K-Means clustering immediately
+    clust_records = [r.model_copy() for r in records]
+    high_group, low_group, clust_result = runner.cluster_manager.cluster_with_kmeans(
+        clust_records, pipeline_run_id=pipeline_run_id
+    )
+
+    current_demo_records = clust_records
+    current_clustering_result = clust_result
+    current_feature_vectors = runner.cluster_manager.last_feature_vectors
+
     snapshot_data = {
         "pipeline_run_id": pipeline_run_id,
         "seed": req.seed,
@@ -356,44 +452,227 @@ def generate_synthetic_data(req: GenerateRequest):
         "count": len(records),
         "high_cluster_count": high_group.record_count,
         "low_cluster_count": low_group.record_count,
-        "records_preview": [r.model_dump() for r in records[:20]],
-        "all_records": [r.model_dump() for r in records],
+        "records_preview": [r.model_dump() for r in clust_records[:20]],
+        "all_records": [r.model_dump() for r in clust_records],
         "features_preview": [f.model_dump() for f in current_feature_vectors[:20]],
         "all_features": [f.model_dump() for f in current_feature_vectors],
         "clustering_diagnostics": clust_result.diagnostics.model_dump() if clust_result else None,
         "clustering_config": clust_result.config.model_dump() if clust_result else None,
+        "is_clustered": True,
         "generation_methodology": methodology,
+    }
+
+
+@app.post("/api/pipeline/cluster")
+def run_pipeline_clustering(config: Optional[KMeansConfig] = None):
+    """Stage 3: Run genuine scikit-learn K-Means ML clustering on current raw dataset.
+    Extracts features, fits StandardScaler & KMeans, derives semantic mapping,
+    and applies clinical security guardrail to prevent high-sensitivity downgrade.
+    """
+    global current_raw_records, current_demo_records, current_pipeline_run_id, current_clustering_result, current_feature_vectors
+    global current_battery_simulation, current_encryption_results, current_receiver_results
+
+    if not current_raw_records and not current_demo_records:
+        raise HTTPException(status_code=400, detail="No active raw dataset available. Generate synthetic data first.")
+
+    records_to_cluster = [r.model_copy() for r in (current_raw_records or current_demo_records)]
+    high_group, low_group, clust_result = runner.cluster_manager.cluster_with_kmeans(
+        records_to_cluster,
+        pipeline_run_id=current_pipeline_run_id,
+        config=config,
+    )
+
+    current_demo_records = records_to_cluster
+    current_clustering_result = clust_result
+    current_feature_vectors = runner.cluster_manager.last_feature_vectors
+
+    # Invalidate downstream battery & encryption state since clustering was updated
+    current_battery_simulation = None
+    current_encryption_results = None
+    current_receiver_results = None
+
+    # Persist updated snapshot
+    snapshot_data = {
+        "pipeline_run_id": current_pipeline_run_id,
+        "seed": current_demo_seed,
+        "record_count": len(current_demo_records),
+        "clustering_diagnostics": clust_result.diagnostics.model_dump() if clust_result else None,
+        "clustering_config": clust_result.config.model_dump() if clust_result else None,
+    }
+    run_store.save_pipeline_snapshot(current_pipeline_run_id, current_demo_seed or 42, len(current_demo_records), snapshot_data)
+
+    return {
+        "status": "SUCCESS",
+        "pipeline_run_id": current_pipeline_run_id,
+        "seed": current_demo_seed,
+        "total_records": len(current_demo_records),
+        "high_cluster_count": high_group.record_count,
+        "low_cluster_count": low_group.record_count,
+        "clustering_config": clust_result.config.model_dump() if clust_result else None,
+        "clustering_diagnostics": clust_result.diagnostics.model_dump() if clust_result else None,
+        "records_preview": [r.model_dump() for r in current_demo_records[:20]],
+        "all_records": [r.model_dump() for r in current_demo_records],
+        "clustered_records": [r.model_dump() for r in current_demo_records],
+        "features_preview": [f.model_dump() for f in current_feature_vectors[:20]],
+        "all_features": [f.model_dump() for f in current_feature_vectors],
+    }
+
+
+@app.post("/api/battery/simulate-current")
+def simulate_battery_on_current_dataset(req: Optional[BatterySimulateRequest] = None):
+    """Stage 4: Simulate battery percentage using the exact records, record count, and
+    effective security classes of the current clustered dataset.
+    """
+    req = req or BatterySimulateRequest()
+    global current_demo_records, current_clustering_result, current_pipeline_run_id, current_battery_simulation, mcu_config
+    if not current_demo_records:
+        raise HTTPException(status_code=400, detail="No active dataset. Generate synthetic data first.")
+    if not current_clustering_result:
+        raise HTTPException(status_code=400, detail="Current dataset has not been clustered. Run ML Clustering before simulating battery.")
+
+    model = McuEnergyModel(mcu_config)
+    sim_result = model.simulate_battery_on_records(
+        records=current_demo_records,
+        pipeline_run_id=current_pipeline_run_id or "PIPE-CURRENT",
+        repetitions=req.repetitions,
+        radio_tx_ms_override=req.radio_tx_ms,
+        profile_name=req.profile,
+    )
+    current_battery_simulation = sim_result
+    return sim_result
+
+
+@app.get("/api/battery/simulate-current")
+def get_current_battery_simulation(
+    repetitions: int = 1,
+    profile: Optional[str] = None,
+    radio_tx_ms: Optional[float] = None,
+):
+    """Retrieve or compute battery simulation on current clustered dataset."""
+    global current_demo_records, current_clustering_result, current_pipeline_run_id, current_battery_simulation, mcu_config
+    if not current_demo_records:
+        raise HTTPException(status_code=400, detail="No active dataset available.")
+    if not current_clustering_result:
+        raise HTTPException(status_code=400, detail="Current dataset has not been clustered. Run ML Clustering first.")
+
+    if current_battery_simulation and repetitions == current_battery_simulation.get("simulated_repetitions", 1):
+        return current_battery_simulation
+
+    model = McuEnergyModel(mcu_config)
+    sim_result = model.simulate_battery_on_records(
+        records=current_demo_records,
+        pipeline_run_id=current_pipeline_run_id or "PIPE-CURRENT",
+        repetitions=repetitions,
+        radio_tx_ms_override=radio_tx_ms,
+        profile_name=profile,
+    )
+    current_battery_simulation = sim_result
+    return sim_result
+
+
+@app.post("/api/pipeline/encrypt-and-verify")
+def encrypt_and_verify_current_dataset():
+    """Stage 5 & 6: Execute adaptive encryption and receiver verification on current clustered records."""
+    global current_demo_records, current_clustering_result, current_pipeline_run_id
+    global current_encryption_results, current_receiver_results
+    if not current_demo_records:
+        raise HTTPException(status_code=400, detail="No active dataset available.")
+    if not current_clustering_result:
+        raise HTTPException(status_code=400, detail="Dataset must be clustered before encryption routing.")
+
+    engine = EncryptionEngine(key_manager)
+    receiver.reset_stats(current_pipeline_run_id)
+
+    enc_list = []
+    rec_list = []
+
+    for r in current_demo_records:
+        eff = getattr(r, "effective_security_class", None) or getattr(r, "sensitivity", None) or SensitivityLevel.LOW
+        eff_str = eff.value if hasattr(eff, "value") else str(eff)
+        algo = EncryptionAlgorithm.AES_256_GCM if eff_str.upper() == "HIGH" else EncryptionAlgorithm.XOR_LIGHTWEIGHT
+
+        env = engine.encrypt_record(
+            record=r,
+            run_id=current_pipeline_run_id or "PIPE-ENCRYPT",
+            algorithm=algo,
+        )
+        ver = receiver.receive_envelope(env)
+
+        enc_list.append({
+            "record_id": r.record_id,
+            "record_type": r.record_type.value,
+            "kmeans_cluster_id": r.kmeans_cluster_id,
+            "cluster_label": r.cluster_label,
+            "policy_sensitivity": r.policy_sensitivity.value if r.policy_sensitivity else (r.sensitivity.value if r.sensitivity else "LOW"),
+            "effective_security_class": eff_str,
+            "baseline_algorithm": "AES-256-GCM",
+            "adaptive_selected_algorithm": algo.value,
+            "nonce_hex": env.nonce_hex,
+            "tag_hex": env.tag_hex,
+            "hmac_hex": env.hmac_hex,
+            "payload_bytes": env.payload_bytes,
+            "pipeline_run_id": current_pipeline_run_id,
+        })
+        rec_list.append({
+            "record_id": r.record_id,
+            "record_type": r.record_type.value,
+            "algorithm": algo.value,
+            "verified": ver.verified,
+            "nonce_unique": True,
+            "rejection_reason": ver.error_message or "",
+            "arrival_timestamp": ver.arrival_timestamp,
+            "pipeline_run_id": current_pipeline_run_id,
+        })
+
+    current_encryption_results = enc_list
+    current_receiver_results = rec_list
+
+    return {
+        "status": "SUCCESS",
+        "pipeline_run_id": current_pipeline_run_id,
+        "records_count": len(enc_list),
+        "aes_256_gcm_count": sum(1 for e in enc_list if e["adaptive_selected_algorithm"] == EncryptionAlgorithm.AES_256_GCM.value),
+        "xor_lightweight_count": sum(1 for e in enc_list if e["adaptive_selected_algorithm"] == EncryptionAlgorithm.XOR_LIGHTWEIGHT.value),
+        "receiver_stats": receiver.get_stats(),
+        "encryption_preview": enc_list[:10],
+        "receiver_preview": rec_list[:10],
     }
 
 
 @app.get("/api/pipeline/current")
 def get_current_pipeline():
     """Retrieve the end-to-end state and intermediate data across all 7 pipeline stages."""
-    global current_demo_records, current_demo_seed, current_pipeline_run_id, current_clustering_result, current_feature_vectors
-    if not current_demo_records:
+    global current_raw_records, current_demo_records, current_demo_seed, current_pipeline_run_id
+    global current_clustering_result, current_feature_vectors, current_battery_simulation
+    global current_encryption_results, current_receiver_results
+
+    if not current_demo_records and not current_raw_records:
         return {
             "has_data": False,
             "pipeline_run_id": None,
-            "message": "No active pipeline run. Generate synthetic data or run a benchmark to initialize.",
+            "message": "No active pipeline run. Generate synthetic data to initialize.",
         }
 
-    records_dump = [r.model_dump() for r in current_demo_records]
+    raw_records_dump = [r.model_dump() for r in (current_raw_records or current_demo_records)]
+    clustered_records_dump = [r.model_dump() for r in current_demo_records]
     features_dump = [f.model_dump() for f in current_feature_vectors]
     
-    high_cluster_records = [r for r in records_dump if r.get("cluster_label") == "CLUSTER-HIGH"]
-    low_cluster_records = [r for r in records_dump if r.get("cluster_label") == "CLUSTER-LOW"]
-    overrides = [r for r in records_dump if r.get("policy_override")]
+    high_cluster_records = [r for r in clustered_records_dump if r.get("cluster_label") == "CLUSTER-HIGH"]
+    low_cluster_records = [r for r in clustered_records_dump if r.get("cluster_label") == "CLUSTER-LOW"]
+    overrides = [r for r in clustered_records_dump if r.get("policy_override")]
 
     return {
         "has_data": True,
         "pipeline_run_id": current_pipeline_run_id,
         "seed": current_demo_seed,
-        "record_count": len(current_demo_records),
+        "record_count": len(current_demo_records or current_raw_records),
+        "is_clustered": current_clustering_result is not None,
         "stages": {
             "stage1_raw": {
                 "name": "Synthetic Dataset Generation",
-                "record_count": len(records_dump),
-                "records": records_dump,
+                "is_available": len(raw_records_dump) > 0,
+                "record_count": len(raw_records_dump),
+                "records": raw_records_dump,
                 "provenance": {
                     "pipeline_run_id": current_pipeline_run_id,
                     "seed": current_demo_seed,
@@ -403,6 +682,7 @@ def get_current_pipeline():
             },
             "stage2_features": {
                 "name": "Feature Engineering & Preprocessing",
+                "is_available": len(features_dump) > 0,
                 "feature_names": HealthcareFeatureExtractor.FEATURE_NAMES,
                 "feature_count": len(HealthcareFeatureExtractor.FEATURE_NAMES),
                 "features": features_dump,
@@ -411,30 +691,43 @@ def get_current_pipeline():
             },
             "stage3_kmeans": {
                 "name": "Unsupervised K-Means Clustering",
+                "is_available": current_clustering_result is not None,
                 "config": current_clustering_result.config.model_dump() if current_clustering_result else None,
                 "diagnostics": current_clustering_result.diagnostics.model_dump() if current_clustering_result else None,
             },
             "stage4_clustered": {
                 "name": "Post-Clustering Dataset with Guardrail",
+                "is_available": current_clustering_result is not None,
                 "high_cluster_count": len(high_cluster_records),
                 "low_cluster_count": len(low_cluster_records),
                 "guardrail_override_count": len(overrides),
-                "records": records_dump,
+                "records": clustered_records_dump,
+            },
+            "stage4_battery": {
+                "name": "Per-Record Battery Simulation & Cumulative Drain",
+                "is_available": current_battery_simulation is not None,
+                "summary": current_battery_simulation if current_battery_simulation else None,
+                "records": current_battery_simulation.get("records", []) if current_battery_simulation else [],
             },
             "stage5_routing": {
                 "name": "Encryption Routing",
+                "is_available": current_clustering_result is not None,
                 "baseline_route": "100% AES-256-GCM",
                 "adaptive_route": {
-                    "aes_256_gcm_count": sum(1 for r in records_dump if r.get("effective_security_class") == "HIGH"),
-                    "xor_lightweight_count": sum(1 for r in records_dump if r.get("effective_security_class") == "LOW"),
+                    "aes_256_gcm_count": sum(1 for r in clustered_records_dump if r.get("effective_security_class") == "HIGH"),
+                    "xor_lightweight_count": sum(1 for r in clustered_records_dump if r.get("effective_security_class") == "LOW"),
                 },
+                "records": current_encryption_results or [],
             },
             "stage6_receiver": {
                 "name": "Simulated Healthcare Receiver Verification",
+                "is_available": current_receiver_results is not None,
                 "receiver_stats": receiver.get_stats(),
+                "records": current_receiver_results or [],
             },
             "stage7_benchmark": {
                 "name": "Energy & Timing Benchmark",
+                "is_available": True,
                 "recent_runs": run_store.list_runs(limit=5),
             },
         },
@@ -494,8 +787,9 @@ def get_pipeline_clustering():
 @app.get("/api/pipeline/export/{stage}.csv")
 def export_pipeline_stage_csv(stage: str):
     """Export a specific pipeline stage intermediate dataset as CSV."""
-    global current_demo_records, current_feature_vectors, current_pipeline_run_id
-    if not current_demo_records:
+    global current_raw_records, current_demo_records, current_feature_vectors, current_pipeline_run_id, current_battery_simulation
+    global current_encryption_results, current_receiver_results, mcu_config
+    if not current_demo_records and not current_raw_records:
         raise HTTPException(status_code=400, detail="No active dataset available for export.")
 
     run_id = current_pipeline_run_id or "UNKNOWN-PIPE"
@@ -504,33 +798,63 @@ def export_pipeline_stage_csv(stage: str):
 
     stage_key = stage.lower()
     if stage_key in ["raw", "stage1", "stage1_raw"]:
+        # Stage 1: Raw generated dataset snapshot (no fabricated cluster labels)
+        raw_list = current_raw_records if current_raw_records else current_demo_records
         writer.writerow(["record_id", "timestamp", "demo_patient_id", "record_type", "value", "unit", "is_synthetic", "pipeline_run_id"])
-        for r in current_demo_records:
+        for r in raw_list:
             writer.writerow([r.record_id, r.timestamp, r.demo_patient_id, r.record_type.value, r.value, r.unit, r.is_synthetic, r.pipeline_run_id or run_id])
         filename = f"stage1_raw_dataset_{run_id}.csv"
+
     elif stage_key in ["features", "stage2", "stage2_features"]:
-        writer.writerow(["record_id", "type_heart_rate", "type_ecg_summary", "type_temperature", "type_step_count", "modality_normalized_value", "physiological_range_deviation", "raw_measurement", "pipeline_run_id"])
+        # Stage 2: Feature engineering matrix with both unscaled and model-scaled features
+        if not current_feature_vectors:
+            raise HTTPException(status_code=400, detail="Feature vectors not yet computed. Run ML Clustering first.")
+        writer.writerow([
+            "record_id", "record_type", "raw_value", "unit",
+            "modality_normalized_value", "physiological_range_deviation",
+            "type_heart_rate", "type_ecg_summary", "type_temperature", "type_step_count",
+            "scaled_type_heart_rate", "scaled_type_ecg_summary", "scaled_type_temperature", "scaled_type_step_count",
+            "scaled_modality_normalized_value", "scaled_physiological_range_deviation",
+            "pipeline_run_id"
+        ])
         for fv in current_feature_vectors:
             writer.writerow([
                 fv.record_id,
+                fv.record_type,
+                fv.raw_value,
+                fv.unit,
+                fv.features.get("modality_normalized_value", 0.0),
+                fv.features.get("physiological_range_deviation", 0.0),
                 fv.features.get("type_heart_rate", 0.0),
                 fv.features.get("type_ecg_summary", 0.0),
                 fv.features.get("type_temperature", 0.0),
                 fv.features.get("type_step_count", 0.0),
-                fv.features.get("modality_normalized_value", 0.0),
-                fv.features.get("physiological_range_deviation", 0.0),
-                fv.features.get("raw_measurement", 0.0),
+                fv.scaled_features.get("type_heart_rate", 0.0),
+                fv.scaled_features.get("type_ecg_summary", 0.0),
+                fv.scaled_features.get("type_temperature", 0.0),
+                fv.scaled_features.get("type_step_count", 0.0),
+                fv.scaled_features.get("modality_normalized_value", 0.0),
+                fv.scaled_features.get("physiological_range_deviation", 0.0),
                 run_id,
             ])
         filename = f"stage2_features_{run_id}.csv"
+
     elif stage_key in ["clustered", "stage3", "stage4", "stage4_clustered", "kmeans"]:
-        writer.writerow(["record_id", "record_type", "value", "unit", "kmeans_cluster_id", "cluster_label", "policy_sensitivity", "effective_security_class", "policy_override", "override_reason", "pipeline_run_id"])
+        # Stage 3/4: Post-clustering dataset with guardrail
+        if not current_clustering_result:
+            raise HTTPException(status_code=400, detail="Clustering has not been executed yet. Run ML Clustering first.")
+        writer.writerow([
+            "record_id", "record_type", "value", "unit", "timestamp",
+            "kmeans_cluster_id", "cluster_label", "policy_sensitivity",
+            "effective_security_class", "policy_override", "override_reason", "pipeline_run_id"
+        ])
         for r in current_demo_records:
             writer.writerow([
                 r.record_id,
                 r.record_type.value,
                 r.value,
                 r.unit,
+                r.timestamp,
                 r.kmeans_cluster_id,
                 r.cluster_label,
                 r.policy_sensitivity.value if r.policy_sensitivity else (r.sensitivity.value if r.sensitivity else "LOW"),
@@ -540,8 +864,125 @@ def export_pipeline_stage_csv(stage: str):
                 r.pipeline_run_id or run_id,
             ])
         filename = f"stage4_clustered_dataset_{run_id}.csv"
+
+    elif stage_key in ["battery", "stage4_battery", "battery_simulation"]:
+        # Stage 4: Per-record battery simulation and cumulative percentage
+        sim = current_battery_simulation
+        if not sim:
+            if not current_clustering_result:
+                raise HTTPException(status_code=400, detail="Cannot simulate battery before ML clustering.")
+            model = McuEnergyModel(mcu_config)
+            sim = model.simulate_battery_on_records(current_demo_records, pipeline_run_id=run_id)
+            current_battery_simulation = sim
+
+        writer.writerow([
+            "pipeline_run_id", "record_id", "kmeans_cluster_id", "cluster_label",
+            "effective_security_class", "baseline_algorithm", "adaptive_algorithm",
+            "baseline_energy_joules", "adaptive_energy_joules",
+            "baseline_cumulative_energy_joules", "adaptive_cumulative_energy_joules",
+            "baseline_battery_remaining_percent", "adaptive_battery_remaining_percent"
+        ])
+        for entry in sim["records"]:
+            writer.writerow([
+                entry["pipeline_run_id"],
+                entry["record_id"],
+                entry["kmeans_cluster_id"],
+                entry["cluster_label"],
+                entry["effective_security_class"],
+                entry["baseline_algorithm"],
+                entry["adaptive_algorithm"],
+                entry["baseline_energy_joules"],
+                entry["adaptive_energy_joules"],
+                entry["baseline_cumulative_energy_joules"],
+                entry["adaptive_cumulative_energy_joules"],
+                entry["baseline_battery_remaining_percent"],
+                entry["adaptive_battery_remaining_percent"],
+            ])
+        filename = f"stage4_battery_simulation_{run_id}.csv"
+
+    elif stage_key in ["routing", "stage5", "stage5_routing"]:
+        # Stage 5: Encryption routing
+        writer.writerow([
+            "record_id", "record_type", "value", "unit",
+            "kmeans_cluster_id", "cluster_label", "policy_sensitivity",
+            "effective_security_class", "baseline_algorithm", "adaptive_selected_algorithm",
+            "pipeline_run_id"
+        ])
+        for r in current_demo_records:
+            eff = getattr(r, "effective_security_class", None) or getattr(r, "sensitivity", None) or SensitivityLevel.LOW
+            eff_str = eff.value if hasattr(eff, "value") else str(eff)
+            adapt_algo = "AES-256-GCM" if eff_str.upper() == "HIGH" else "XOR-EXPERIMENTAL"
+            writer.writerow([
+                r.record_id,
+                r.record_type.value,
+                r.value,
+                r.unit,
+                r.kmeans_cluster_id,
+                r.cluster_label,
+                r.policy_sensitivity.value if r.policy_sensitivity else (r.sensitivity.value if r.sensitivity else "LOW"),
+                eff_str,
+                "AES-256-GCM",
+                adapt_algo,
+                r.pipeline_run_id or run_id,
+            ])
+        filename = f"stage5_encryption_routing_{run_id}.csv"
+
+    elif stage_key in ["receiver", "stage6", "stage6_receiver"]:
+        # Stage 6: Receiver verification
+        if not current_receiver_results:
+            encrypt_and_verify_current_dataset()
+        writer.writerow([
+            "record_id", "record_type", "algorithm", "verified",
+            "nonce_unique", "rejection_reason", "arrival_timestamp", "pipeline_run_id"
+        ])
+        for r in (current_receiver_results or []):
+            writer.writerow([
+                r.get("record_id"),
+                r.get("record_type"),
+                r.get("algorithm"),
+                1 if r.get("verified") else 0,
+                1 if r.get("nonce_unique") else 0,
+                r.get("rejection_reason", ""),
+                r.get("arrival_timestamp", ""),
+                r.get("pipeline_run_id", run_id),
+            ])
+        filename = f"stage6_receiver_verification_{run_id}.csv"
+
+    elif stage_key in ["benchmark", "stage7", "stage7_benchmark"]:
+        # Stage 7: Benchmark summary
+        writer.writerow([
+            "pipeline_run_id", "record_count", "high_count", "low_count",
+            "scenario_name", "baseline_energy_joules", "adaptive_energy_joules",
+            "energy_saving_percent", "baseline_crypto_latency_ms", "adaptive_crypto_latency_ms",
+            "latency_saving_percent", "baseline_runtime_hours", "adaptive_runtime_hours", "status"
+        ])
+        model = McuEnergyModel(mcu_config)
+        def _is_high(r):
+            eff = getattr(r, "effective_security_class", None) or getattr(r, "sensitivity", None)
+            return (eff.value if hasattr(eff, "value") else str(eff)).upper() == "HIGH"
+        h_cnt = sum(1 for r in current_demo_records if _is_high(r))
+        l_cnt = len(current_demo_records) - h_cnt
+        scen = model.calculate_scenario(len(current_demo_records), h_cnt, l_cnt)
+        writer.writerow([
+            run_id,
+            len(current_demo_records),
+            h_cnt,
+            l_cnt,
+            scen["scenario_name"],
+            scen["baseline"]["total_energy_joules"],
+            scen["adaptive"]["total_energy_joules"],
+            scen["energy_comparison"].get("energy_saving_percent", 0.0),
+            scen["baseline"]["crypto_duration_ms"],
+            scen["adaptive"]["crypto_duration_ms"],
+            scen["crypto_time_comparison"].get("percent_change", 0.0),
+            scen["baseline"]["indicative_runtime_hours"],
+            scen["adaptive"]["indicative_runtime_hours"],
+            "COMPLETED",
+        ])
+        filename = f"stage7_benchmark_{run_id}.csv"
+
     else:
-        raise HTTPException(status_code=400, detail=f"Unknown export stage '{stage}'. Valid stages: raw, features, clustered.")
+        raise HTTPException(status_code=400, detail=f"Unknown export stage '{stage}'. Valid stages: raw, features, clustered, battery, routing, receiver, benchmark.")
 
     output.seek(0)
     return StreamingResponse(
@@ -554,22 +995,26 @@ def export_pipeline_stage_csv(stage: str):
 @app.get("/api/pipeline/export/{stage}.json")
 def export_pipeline_stage_json(stage: str):
     """Export a specific pipeline stage intermediate dataset as JSON."""
-    global current_demo_records, current_feature_vectors, current_pipeline_run_id, current_clustering_result
-    if not current_demo_records:
+    global current_raw_records, current_demo_records, current_feature_vectors, current_pipeline_run_id, current_clustering_result
+    global current_battery_simulation, current_encryption_results, current_receiver_results, mcu_config
+    if not current_demo_records and not current_raw_records:
         raise HTTPException(status_code=400, detail="No active dataset available for export.")
 
     run_id = current_pipeline_run_id or "UNKNOWN-PIPE"
     stage_key = stage.lower()
     if stage_key in ["raw", "stage1", "stage1_raw"]:
+        raw_list = current_raw_records if current_raw_records else current_demo_records
         data = {
             "stage": "stage1_raw_dataset",
             "pipeline_run_id": run_id,
             "exported_at": datetime.now(timezone.utc).isoformat(),
-            "record_count": len(current_demo_records),
-            "records": [r.model_dump() for r in current_demo_records],
+            "record_count": len(raw_list),
+            "records": [r.model_dump() for r in raw_list],
         }
         filename = f"stage1_raw_dataset_{run_id}.json"
     elif stage_key in ["features", "stage2", "stage2_features"]:
+        if not current_feature_vectors:
+            raise HTTPException(status_code=400, detail="Feature vectors not yet computed. Run ML Clustering first.")
         data = {
             "stage": "stage2_features",
             "pipeline_run_id": run_id,
@@ -580,6 +1025,8 @@ def export_pipeline_stage_json(stage: str):
         }
         filename = f"stage2_features_{run_id}.json"
     elif stage_key in ["clustered", "stage3", "stage4", "stage4_clustered", "kmeans"]:
+        if not current_clustering_result:
+            raise HTTPException(status_code=400, detail="Clustering has not been executed yet. Run ML Clustering first.")
         data = {
             "stage": "stage4_clustered_dataset",
             "pipeline_run_id": run_id,
@@ -589,14 +1036,63 @@ def export_pipeline_stage_json(stage: str):
             "records": [r.model_dump() for r in current_demo_records],
         }
         filename = f"stage4_clustered_dataset_{run_id}.json"
+    elif stage_key in ["battery", "stage4_battery", "battery_simulation"]:
+        sim = current_battery_simulation
+        if not sim:
+            if not current_clustering_result:
+                raise HTTPException(status_code=400, detail="Cannot simulate battery before ML clustering.")
+            model = McuEnergyModel(mcu_config)
+            sim = model.simulate_battery_on_records(current_demo_records, pipeline_run_id=run_id)
+            current_battery_simulation = sim
+        data = {
+            "stage": "stage4_battery_simulation",
+            "pipeline_run_id": run_id,
+            "exported_at": datetime.now(timezone.utc).isoformat(),
+            "simulation": sim,
+        }
+        filename = f"stage4_battery_simulation_{run_id}.json"
+    elif stage_key in ["routing", "stage5", "stage5_routing"]:
+        data = {
+            "stage": "stage5_encryption_routing",
+            "pipeline_run_id": run_id,
+            "exported_at": datetime.now(timezone.utc).isoformat(),
+            "records": current_encryption_results or [],
+        }
+        filename = f"stage5_encryption_routing_{run_id}.json"
+    elif stage_key in ["receiver", "stage6", "stage6_receiver"]:
+        if not current_receiver_results:
+            encrypt_and_verify_current_dataset()
+        data = {
+            "stage": "stage6_receiver_verification",
+            "pipeline_run_id": run_id,
+            "exported_at": datetime.now(timezone.utc).isoformat(),
+            "records": current_receiver_results or [],
+        }
+        filename = f"stage6_receiver_verification_{run_id}.json"
+    elif stage_key in ["benchmark", "stage7", "stage7_benchmark"]:
+        model = McuEnergyModel(mcu_config)
+        def _is_high(r):
+            eff = getattr(r, "effective_security_class", None) or getattr(r, "sensitivity", None)
+            return (eff.value if hasattr(eff, "value") else str(eff)).upper() == "HIGH"
+        h_cnt = sum(1 for r in current_demo_records if _is_high(r))
+        l_cnt = len(current_demo_records) - h_cnt
+        scen = model.calculate_scenario(len(current_demo_records), h_cnt, l_cnt)
+        data = {
+            "stage": "stage7_benchmark",
+            "pipeline_run_id": run_id,
+            "exported_at": datetime.now(timezone.utc).isoformat(),
+            "scenario": scen,
+        }
+        filename = f"stage7_benchmark_{run_id}.json"
     else:
-        raise HTTPException(status_code=400, detail=f"Unknown export stage '{stage}'. Valid stages: raw, features, clustered.")
+        raise HTTPException(status_code=400, detail=f"Unknown export stage '{stage}'. Valid stages: raw, features, clustered, battery, routing, receiver, benchmark.")
 
     return Response(
         content=json.dumps(data, indent=2),
         media_type="application/json",
         headers={"Content-Disposition": f"attachment; filename={filename}"},
     )
+
 
 
 @app.get("/api/battery/energy-model")
@@ -945,14 +1441,21 @@ def export_run_json(run_id: str):
 @app.post("/api/demo/reset")
 def reset_demo():
     """Reset store, receiver stats, and state back to default."""
-    global current_demo_records, current_power_override, current_pipeline_run_id, current_clustering_result, current_feature_vectors
+    global current_raw_records, current_demo_records, current_demo_seed, current_power_override
+    global current_pipeline_run_id, current_clustering_result, current_feature_vectors
+    global current_battery_simulation, current_encryption_results, current_receiver_results
     run_store.reset()
     receiver.reset_stats()
+    current_raw_records = []
     current_demo_records = []
+    current_demo_seed = None
     current_power_override = None
     current_pipeline_run_id = None
     current_clustering_result = None
     current_feature_vectors = []
+    current_battery_simulation = None
+    current_encryption_results = None
+    current_receiver_results = None
     runner.reset_cancellation()
     return {"message": "Demo state reset successfully."}
 

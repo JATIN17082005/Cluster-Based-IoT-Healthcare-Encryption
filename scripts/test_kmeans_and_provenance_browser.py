@@ -89,6 +89,10 @@ def run_e2e_verification():
             print(f"   Pipeline Run ID: '{run_id}'")
             assert "PIPE-S42" in run_id
 
+            # Click Run ML Clustering for Stage 3 in the interactive workflow
+            page.click("#btn-run-ml-clustering")
+            time.sleep(1)
+
             agreement_text = page.locator("#meta-kmeans-agreement").inner_text().strip()
             print(f"   K-Means Agreement & Silhouette: '{agreement_text}'")
             assert "%" in agreement_text and "Silhouette" in agreement_text
