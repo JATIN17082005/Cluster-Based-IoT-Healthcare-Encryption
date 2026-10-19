@@ -654,69 +654,89 @@ class McuEnergyModel:
         e_idle_routine_j = v * (cfg.idle_sleep_current_ma / 1000.0) * (t_idle_routine_ms / 1000.0)
         e_rec_routine_j = e_proc_j + e_crypto_routine_j + e_tx_j + e_idle_routine_j
 
+        reps = max(1, int(repetitions))
+        max_sim_packets = 50_000
+        total_requested = len(records) * reps
+        if total_requested > max_sim_packets:
+            raise ValueError(
+                f"Simulation workload of {total_requested} packets ({reps} repetitions x {len(records)} records) "
+                f"exceeds documented safe export limit of {max_sim_packets} packets. "
+                f"Please select repetitions <= {max_sim_packets // max(1, len(records))} to prevent memory exhaustion."
+            )
+
         cum_base_j = 0.0
         cum_adapt_j = 0.0
         per_record_entries: List[Dict[str, Any]] = []
         n_high = 0
         n_routine = 0
+        global_packet_idx = 0
 
-        for r in records:
-            rec_id = getattr(r, "record_id", "UNKNOWN-REC")
-            c_id = getattr(r, "kmeans_cluster_id", 0)
-            if c_id is None:
-                c_id = 0
-            c_label = getattr(r, "cluster_label", "CLUSTER-LOW") or "CLUSTER-LOW"
+        for rep in range(1, reps + 1):
+            for r in records:
+                global_packet_idx += 1
+                rec_id = getattr(r, "record_id", "UNKNOWN-REC")
+                c_id = getattr(r, "kmeans_cluster_id", 0)
+                if c_id is None:
+                    c_id = 0
+                c_label = getattr(r, "cluster_label", "CLUSTER-LOW") or "CLUSTER-LOW"
 
-            eff_sec_attr = getattr(r, "effective_security_class", None) or getattr(r, "sensitivity", None) or "LOW"
-            eff_sec_str = eff_sec_attr.value if hasattr(eff_sec_attr, "value") else str(eff_sec_attr)
+                eff_sec_attr = getattr(r, "effective_security_class", None) or getattr(r, "sensitivity", None) or "LOW"
+                eff_sec_str = eff_sec_attr.value if hasattr(eff_sec_attr, "value") else str(eff_sec_attr)
 
-            is_high = (eff_sec_str.upper() == "HIGH")
-            if is_high:
-                n_high += 1
-                adapt_algo = "AES-256-GCM"
-                adapt_e_crypto = e_crypto_base_j
-                adapt_e_idle = e_idle_base_j
-                adapt_e_rec = e_rec_base_j
-            else:
-                n_routine += 1
-                adapt_algo = "XOR-EXPERIMENTAL"
-                adapt_e_crypto = e_crypto_routine_j
-                adapt_e_idle = e_idle_routine_j
-                adapt_e_rec = e_rec_routine_j
+                is_high = (eff_sec_str.upper() == "HIGH")
+                if rep == 1:
+                    if is_high:
+                        n_high += 1
+                    else:
+                        n_routine += 1
 
-            cum_base_j += e_rec_base_j
-            cum_adapt_j += adapt_e_rec
+                if is_high:
+                    adapt_algo = "AES-256-GCM"
+                    adapt_e_crypto = e_crypto_base_j
+                    adapt_e_idle = e_idle_base_j
+                    adapt_e_rec = e_rec_base_j
+                else:
+                    adapt_algo = "XOR-EXPERIMENTAL"
+                    adapt_e_crypto = e_crypto_routine_j
+                    adapt_e_idle = e_idle_routine_j
+                    adapt_e_rec = e_rec_routine_j
 
-            base_depletion_pct = (cum_base_j / usable_rail_energy_joules) * 100.0
-            adapt_depletion_pct = (cum_adapt_j / usable_rail_energy_joules) * 100.0
+                cum_base_j += e_rec_base_j
+                cum_adapt_j += adapt_e_rec
 
-            base_rem_pct = max(0.0, min(100.0, 100.0 - base_depletion_pct))
-            adapt_rem_pct = max(0.0, min(100.0, 100.0 - adapt_depletion_pct))
+                base_depletion_pct = (cum_base_j / usable_rail_energy_joules) * 100.0
+                adapt_depletion_pct = (cum_adapt_j / usable_rail_energy_joules) * 100.0
 
-            per_record_entries.append({
-                "pipeline_run_id": pipeline_run_id,
-                "record_id": rec_id,
-                "kmeans_cluster_id": int(c_id),
-                "cluster_label": c_label,
-                "effective_security_class": eff_sec_str,
-                "baseline_algorithm": "AES-256-GCM",
-                "adaptive_algorithm": adapt_algo,
-                "baseline_energy_joules": round(e_rec_base_j, 8),
-                "adaptive_energy_joules": round(adapt_e_rec, 8),
-                "baseline_cumulative_energy_joules": round(cum_base_j, 8),
-                "adaptive_cumulative_energy_joules": round(cum_adapt_j, 8),
-                "baseline_battery_remaining_percent": round(base_rem_pct, 6),
-                "adaptive_battery_remaining_percent": round(adapt_rem_pct, 6),
-                "baseline_crypto_energy_joules": round(e_crypto_base_j, 8),
-                "adaptive_crypto_energy_joules": round(adapt_e_crypto, 8),
-                "shared_proc_energy_joules": round(e_proc_j, 8),
-                "radio_tx_energy_joules": round(e_tx_j, 8),
-                "idle_sleep_energy_joules": round(adapt_e_idle, 8),
-            })
+                base_rem_pct = max(0.0, min(100.0, 100.0 - base_depletion_pct))
+                adapt_rem_pct = max(0.0, min(100.0, 100.0 - adapt_depletion_pct))
 
-        reps = max(1, repetitions)
-        total_base_j = cum_base_j * reps
-        total_adapt_j = cum_adapt_j * reps
+                per_record_entries.append({
+                    "pipeline_run_id": pipeline_run_id,
+                    "record_id": rec_id,
+                    "repetition_index": rep,
+                    "packet_index": global_packet_idx,
+                    "kmeans_cluster_id": int(c_id),
+                    "cluster_label": c_label,
+                    "effective_security_class": eff_sec_str,
+                    "baseline_algorithm": "AES-256-GCM",
+                    "adaptive_algorithm": adapt_algo,
+                    "baseline_energy_joules": round(e_rec_base_j, 8),
+                    "adaptive_energy_joules": round(adapt_e_rec, 8),
+                    "baseline_cumulative_energy_joules": round(cum_base_j, 8),
+                    "adaptive_cumulative_energy_joules": round(cum_adapt_j, 8),
+                    "baseline_battery_remaining_percent": round(base_rem_pct, 6),
+                    "adaptive_battery_remaining_percent": round(adapt_rem_pct, 6),
+                    "baseline_crypto_energy_joules": round(e_crypto_base_j, 8),
+                    "adaptive_crypto_energy_joules": round(adapt_e_crypto, 8),
+                    "shared_proc_energy_joules": round(e_proc_j, 8),
+                    "radio_tx_energy_joules": round(e_tx_j, 8),
+                    "idle_sleep_energy_joules": round(adapt_e_idle, 8),
+                })
+
+        total_base_j = cum_base_j
+        total_adapt_j = cum_adapt_j
+        single_batch_base_j = cum_base_j / reps
+        single_batch_adapt_j = cum_adapt_j / reps
 
         final_base_rem = max(0.0, min(100.0, 100.0 - (total_base_j / usable_rail_energy_joules) * 100.0))
         final_adapt_rem = max(0.0, min(100.0, 100.0 - (total_adapt_j / usable_rail_energy_joules) * 100.0))
@@ -741,6 +761,7 @@ class McuEnergyModel:
         return {
             "pipeline_run_id": pipeline_run_id,
             "total_records": len(records),
+            "total_packets_simulated": len(per_record_entries),
             "high_sensitivity_count": n_high,
             "low_sensitivity_count": n_routine,
             "scenario_name": prof_name,
@@ -752,8 +773,8 @@ class McuEnergyModel:
             "starting_capacity_mah": cfg.battery_nominal_mah,
             "usable_capacity_mah": round(cfg.battery_nominal_mah * cfg.battery_usable_factor, 2),
             "usable_rail_energy_joules": round(usable_rail_energy_joules, 2),
-            "baseline_batch_energy_joules": round(cum_base_j, 8),
-            "adaptive_batch_energy_joules": round(cum_adapt_j, 8),
+            "baseline_batch_energy_joules": round(single_batch_base_j, 8),
+            "adaptive_batch_energy_joules": round(single_batch_adapt_j, 8),
             "baseline_total_energy_joules": round(total_base_j, 8),
             "adaptive_total_energy_joules": round(total_adapt_j, 8),
             "baseline_final_remaining_percent": round(final_base_rem, 4),

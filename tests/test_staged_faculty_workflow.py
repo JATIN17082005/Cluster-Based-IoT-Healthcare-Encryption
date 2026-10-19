@@ -267,3 +267,144 @@ def test_stage7_stale_data_invalidation_on_new_generation(client):
     bat_fail = client.post("/api/battery/simulate-current")
     assert bat_fail.status_code == 400
     assert "Run ML Clustering before simulating battery" in bat_fail.json()["detail"]
+
+
+def test_repeated_batch_battery_simulation_repetitions_1(client):
+    """Verify that repetitions=1 maintains single-batch behavior with packet and repetition indices."""
+    client.post("/api/pipeline/generate-raw", json={"count": 50, "seed": 42})
+    client.post("/api/pipeline/cluster")
+
+    resp = client.post("/api/battery/simulate-current?repetitions=1")
+    assert resp.status_code == 200
+    data = resp.json()
+
+    assert data["duration_batches"] == 1
+    assert data["total_packets_simulated"] == 50
+    assert len(data["records"]) == 50
+
+    records = data["records"]
+    running_base_j = 0.0
+    for idx, r in enumerate(records):
+        assert r["repetition_index"] == 1
+        assert r["packet_index"] == idx + 1
+        assert r["baseline_cumulative_energy_joules"] > running_base_j
+        running_base_j = r["baseline_cumulative_energy_joules"]
+
+    # Final row cumulative values must match summary
+    last = records[-1]
+    assert math.isclose(last["baseline_cumulative_energy_joules"], data["baseline_total_energy_joules"], rel_tol=1e-5)
+    assert math.isclose(last["baseline_cumulative_energy_joules"], data["baseline_batch_energy_joules"], rel_tol=1e-5)
+    assert math.isclose(last["adaptive_cumulative_energy_joules"], data["adaptive_total_energy_joules"], rel_tol=1e-5)
+    assert math.isclose(last["baseline_battery_remaining_percent"], data["baseline_final_remaining_percent"], rel_tol=1e-5)
+    assert math.isclose(last["adaptive_battery_remaining_percent"], data["adaptive_final_remaining_percent"], rel_tol=1e-5)
+
+    # Battery CSV export row count & headers
+    csv_resp = client.get("/api/pipeline/export/battery.csv")
+    assert csv_resp.status_code == 200
+    csv_rows = list(csv.reader(io.StringIO(csv_resp.text)))
+    assert len(csv_rows) == 51  # 1 header + 50 entries
+    assert "repetition_index" in csv_rows[0]
+    assert "packet_index" in csv_rows[0]
+
+
+def test_repeated_batch_battery_simulation_repetitions_2(client):
+    """Verify that repetitions=2 advances progression monotonically across both passes without reset."""
+    client.post("/api/pipeline/generate-raw", json={"count": 40, "seed": 77})
+    client.post("/api/pipeline/cluster")
+
+    resp = client.post("/api/battery/simulate-current?repetitions=2")
+    assert resp.status_code == 200
+    data = resp.json()
+
+    assert data["duration_batches"] == 2
+    assert data["total_packets_simulated"] == 80
+    assert len(data["records"]) == 80
+
+    records = data["records"]
+    single_batch_base_j = data["baseline_batch_energy_joules"]
+    total_base_j = data["baseline_total_energy_joules"]
+    assert math.isclose(total_base_j, single_batch_base_j * 2, rel_tol=1e-5)
+
+    # Monotonic accumulation and packet indexing check across entire multi-batch run
+    for idx, r in enumerate(records):
+        assert r["packet_index"] == idx + 1
+        if idx < 40:
+            assert r["repetition_index"] == 1
+        else:
+            assert r["repetition_index"] == 2
+            # Pass 2 cumulative energy must be strictly greater than Pass 1 single-batch energy
+            assert r["baseline_cumulative_energy_joules"] > single_batch_base_j
+
+        if idx > 0:
+            assert r["baseline_cumulative_energy_joules"] > records[idx - 1]["baseline_cumulative_energy_joules"]
+            assert r["adaptive_cumulative_energy_joules"] > records[idx - 1]["adaptive_cumulative_energy_joules"]
+            assert r["baseline_battery_remaining_percent"] <= records[idx - 1]["baseline_battery_remaining_percent"]
+            assert r["adaptive_battery_remaining_percent"] <= records[idx - 1]["adaptive_battery_remaining_percent"]
+
+    # End of Pass 1 check (record 39, index 39)
+    assert math.isclose(records[39]["baseline_cumulative_energy_joules"], single_batch_base_j, rel_tol=1e-5)
+
+    # End of Pass 2 check (record 79, index 79)
+    last = records[79]
+    assert math.isclose(last["baseline_cumulative_energy_joules"], total_base_j, rel_tol=1e-5)
+    assert math.isclose(last["baseline_battery_remaining_percent"], data["baseline_final_remaining_percent"], rel_tol=1e-5)
+    assert math.isclose(last["adaptive_battery_remaining_percent"], data["adaptive_final_remaining_percent"], rel_tol=1e-5)
+
+    # Battery CSV export must contain all 80 rows across both passes
+    csv_resp = client.get("/api/pipeline/export/battery.csv")
+    assert csv_resp.status_code == 200
+    csv_rows = list(csv.reader(io.StringIO(csv_resp.text)))
+    assert len(csv_rows) == 81  # 1 header + 80 entries
+    rep1_count = sum(1 for row in csv_rows[1:] if row[csv_rows[0].index("repetition_index")] == "1")
+    rep2_count = sum(1 for row in csv_rows[1:] if row[csv_rows[0].index("repetition_index")] == "2")
+    assert rep1_count == 40
+    assert rep2_count == 40
+
+
+def test_repeated_batch_battery_simulation_repetitions_10_duration(client):
+    """Verify that larger repetitions (e.g. 10 passes) calculate simulated elapsed time correctly."""
+    client.post("/api/pipeline/generate-raw", json={"count": 30, "seed": 101})
+    client.post("/api/pipeline/cluster")
+
+    resp = client.post("/api/battery/simulate-current?repetitions=10")
+    assert resp.status_code == 200
+    data = resp.json()
+
+    assert data["duration_batches"] == 10
+    assert data["total_packets_simulated"] == 300
+    assert len(data["records"]) == 300
+    # 300 packets at 50 Hz reporting frequency = 6.00 seconds
+    assert math.isclose(data["simulated_operating_seconds"], 6.00, rel_tol=1e-4)
+
+    last = data["records"][-1]
+    assert last["packet_index"] == 300
+    assert last["repetition_index"] == 10
+    assert math.isclose(last["baseline_cumulative_energy_joules"], data["baseline_total_energy_joules"], rel_tol=1e-5)
+    assert math.isclose(data["baseline_total_energy_joules"], data["baseline_batch_energy_joules"] * 10, rel_tol=1e-5)
+
+    # Export check
+    csv_resp = client.get("/api/pipeline/export/battery.csv")
+    assert csv_resp.status_code == 200
+    csv_rows = list(csv.reader(io.StringIO(csv_resp.text)))
+    assert len(csv_rows) == 301
+
+
+def test_repeated_batch_battery_safeguard_limit(client):
+    """Verify safeguard prevents excessive workloads (>50,000 packets) with HTTP 422 and ValueError."""
+    import pytest
+    from src.power_measurement import McuEnergyModel
+
+    client.post("/api/pipeline/generate-raw", json={"count": 100, "seed": 55})
+    client.post("/api/pipeline/cluster")
+
+    # 100 records * 600 repetitions = 60,000 packets (> 50,000 safeguard limit)
+    resp = client.post("/api/battery/simulate-current?repetitions=600")
+    assert resp.status_code == 422
+    assert "exceeds documented safe export limit of 50000 packets" in resp.json()["detail"]
+
+    # Direct model verification
+    records = [{"record_id": f"REC-{i}", "effective_security_class": "HIGH"} for i in range(100)]
+    model = McuEnergyModel()
+    with pytest.raises(ValueError, match="exceeds documented safe export limit"):
+        model.simulate_battery_on_records(records, repetitions=600)
+

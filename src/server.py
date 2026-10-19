@@ -519,11 +519,20 @@ def run_pipeline_clustering(config: Optional[KMeansConfig] = None):
 
 
 @app.post("/api/battery/simulate-current")
-def simulate_battery_on_current_dataset(req: Optional[BatterySimulateRequest] = None):
+def simulate_battery_on_current_dataset(
+    req: Optional[BatterySimulateRequest] = None,
+    repetitions: Optional[int] = None,
+    profile: Optional[str] = None,
+    radio_tx_ms: Optional[float] = None,
+):
     """Stage 4: Simulate battery percentage using the exact records, record count, and
     effective security classes of the current clustered dataset.
     """
     req = req or BatterySimulateRequest()
+    eff_repetitions = repetitions if repetitions is not None else req.repetitions
+    eff_profile = profile if profile is not None else req.profile
+    eff_radio_tx = radio_tx_ms if radio_tx_ms is not None else req.radio_tx_ms
+
     global current_demo_records, current_clustering_result, current_pipeline_run_id, current_battery_simulation, mcu_config
     if not current_demo_records:
         raise HTTPException(status_code=400, detail="No active dataset. Generate synthetic data first.")
@@ -531,13 +540,16 @@ def simulate_battery_on_current_dataset(req: Optional[BatterySimulateRequest] = 
         raise HTTPException(status_code=400, detail="Current dataset has not been clustered. Run ML Clustering before simulating battery.")
 
     model = McuEnergyModel(mcu_config)
-    sim_result = model.simulate_battery_on_records(
-        records=current_demo_records,
-        pipeline_run_id=current_pipeline_run_id or "PIPE-CURRENT",
-        repetitions=req.repetitions,
-        radio_tx_ms_override=req.radio_tx_ms,
-        profile_name=req.profile,
-    )
+    try:
+        sim_result = model.simulate_battery_on_records(
+            records=current_demo_records,
+            pipeline_run_id=current_pipeline_run_id or "PIPE-CURRENT",
+            repetitions=eff_repetitions,
+            radio_tx_ms_override=eff_radio_tx,
+            profile_name=eff_profile,
+        )
+    except ValueError as ve:
+        raise HTTPException(status_code=422, detail=str(ve))
     current_battery_simulation = sim_result
     return sim_result
 
@@ -559,13 +571,16 @@ def get_current_battery_simulation(
         return current_battery_simulation
 
     model = McuEnergyModel(mcu_config)
-    sim_result = model.simulate_battery_on_records(
-        records=current_demo_records,
-        pipeline_run_id=current_pipeline_run_id or "PIPE-CURRENT",
-        repetitions=repetitions,
-        radio_tx_ms_override=radio_tx_ms,
-        profile_name=profile,
-    )
+    try:
+        sim_result = model.simulate_battery_on_records(
+            records=current_demo_records,
+            pipeline_run_id=current_pipeline_run_id or "PIPE-CURRENT",
+            repetitions=repetitions,
+            radio_tx_ms_override=radio_tx_ms,
+            profile_name=profile,
+        )
+    except ValueError as ve:
+        raise HTTPException(status_code=422, detail=str(ve))
     current_battery_simulation = sim_result
     return sim_result
 
@@ -876,7 +891,8 @@ def export_pipeline_stage_csv(stage: str):
             current_battery_simulation = sim
 
         writer.writerow([
-            "pipeline_run_id", "record_id", "kmeans_cluster_id", "cluster_label",
+            "pipeline_run_id", "record_id", "repetition_index", "packet_index",
+            "kmeans_cluster_id", "cluster_label",
             "effective_security_class", "baseline_algorithm", "adaptive_algorithm",
             "baseline_energy_joules", "adaptive_energy_joules",
             "baseline_cumulative_energy_joules", "adaptive_cumulative_energy_joules",
@@ -886,6 +902,8 @@ def export_pipeline_stage_csv(stage: str):
             writer.writerow([
                 entry["pipeline_run_id"],
                 entry["record_id"],
+                entry.get("repetition_index", 1),
+                entry.get("packet_index", 1),
                 entry["kmeans_cluster_id"],
                 entry["cluster_label"],
                 entry["effective_security_class"],

@@ -1034,11 +1034,24 @@ document.addEventListener("DOMContentLoaded", () => {
       if (btnDownloadBatterySimCsvTab2) btnDownloadBatterySimCsvTab2.disabled = false;
       if (btnDownloadBatteryTableCsv) btnDownloadBatteryTableCsv.disabled = false;
 
-      // Update Tab 2 Lineage ID
+      // Update Tab 2 Lineage ID and Badges
       if (batterySimLineageId) batterySimLineageId.textContent = data.pipeline_run_id || "PIPE-CURRENT";
       const repsCount = data.duration_batches ?? data.simulated_repetitions ?? 1;
+      const totalPkts = data.total_packets_simulated ?? (data.records ? data.records.length : (data.total_records * repsCount));
+      const elapsedSec = data.simulated_operating_seconds ?? (totalPkts * 0.02);
+
+      const tab2RepsBadge = document.getElementById("tab2-battery-reps-badge");
+      const tab2TimeBadge = document.getElementById("tab2-battery-time-badge");
+      if (tab2RepsBadge) {
+        tab2RepsBadge.style.display = "inline-block";
+        tab2RepsBadge.textContent = `${repsCount}× Passes (${totalPkts} Pkts)`;
+      }
+      if (tab2TimeBadge) {
+        tab2TimeBadge.style.display = "inline-block";
+        tab2TimeBadge.textContent = `${elapsedSec.toFixed(2)}s Operating Duration`;
+      }
       if (tab2BatteryStatusTag) {
-        tab2BatteryStatusTag.textContent = `SIMULATED (${repsCount}× BATCH)`;
+        tab2BatteryStatusTag.textContent = `SIMULATED (${repsCount}× PASSES • ${totalPkts} PKTS • ${elapsedSec.toFixed(1)}s)`;
         tab2BatteryStatusTag.className = "badge badge-low";
       }
 
@@ -1099,15 +1112,21 @@ document.addEventListener("DOMContentLoaded", () => {
     const records = simData?.records || simData?.per_record_simulation || [];
     if (!records || records.length === 0) {
       batterySimulationTableBody.innerHTML = `
-        <tr><td colspan="11" style="text-align:center;padding:2rem;color:var(--text-muted);">No records in battery simulation. Click "Simulate Battery on Current Dataset" above.</td></tr>
+        <tr><td colspan="13" style="text-align:center;padding:2rem;color:var(--text-muted);">No records in battery simulation. Click "Simulate Battery on Current Dataset" above.</td></tr>
       `;
       return;
     }
 
-    batterySimulationTableBody.innerHTML = records.map((entry) => {
+    const displayLimit = 100;
+    const isTruncated = records.length > displayLimit;
+    const recordsToShow = records.slice(0, displayLimit);
+
+    let rowsHtml = recordsToShow.map((entry) => {
       const isHigh = entry.cluster_label === "CLUSTER-HIGH" || entry.effective_security_class === "HIGH";
       return `
         <tr>
+          <td><code style="color:var(--brand-cyan);font-weight:600;">#${entry.packet_index ?? 1}</code></td>
+          <td><span class="badge badge-neutral">Pass ${entry.repetition_index ?? 1}</span></td>
           <td><code>${entry.record_id}</code></td>
           <td><span class="${isHigh ? 'badge-cluster-high' : 'badge-cluster-low'}">${entry.cluster_label || ('Cluster ' + entry.kmeans_cluster_id)}</span></td>
           <td><span class="badge ${entry.effective_security_class === 'HIGH' ? 'badge-high' : 'badge-low'}">${entry.effective_security_class}</span></td>
@@ -1122,6 +1141,18 @@ document.addEventListener("DOMContentLoaded", () => {
         </tr>
       `;
     }).join("");
+
+    if (isTruncated) {
+      rowsHtml += `
+        <tr>
+          <td colspan="13" style="text-align:center;padding:1rem;background:var(--bg-surface-2);color:var(--text-secondary);font-size:0.8rem;">
+            Displaying first 100 of ${records.length} simulated packets for browser performance. All ${records.length} packets are preserved in memory and included in the CSV export.
+          </td>
+        </tr>
+      `;
+    }
+
+    batterySimulationTableBody.innerHTML = rowsHtml;
   }
 
   // =========================================================================
@@ -1220,6 +1251,8 @@ document.addEventListener("DOMContentLoaded", () => {
       } else if (viewName === "battery") {
         datasetTableHead.innerHTML = `
           <tr style="position:sticky;top:0;background:var(--bg-surface-2);z-index:2;">
+            <th>Pkt #</th>
+            <th>Pass</th>
             <th>Record ID</th>
             <th>Cluster</th>
             <th>Effective Security</th>
@@ -1342,7 +1375,7 @@ document.addEventListener("DOMContentLoaded", () => {
       if (!currentBatterySimulation) {
         datasetTableBody.innerHTML = `
           <tr>
-            <td colspan="11" style="text-align:center;padding:2.5rem;color:var(--text-muted);">
+            <td colspan="13" style="text-align:center;padding:2.5rem;color:var(--text-muted);">
               Battery simulation has not been executed yet on this batch.<br>
               Click <strong>"3. Simulate Battery on Current Dataset"</strong> above to compute per-record energy and cumulative drain.
             </td>
@@ -1382,6 +1415,8 @@ document.addEventListener("DOMContentLoaded", () => {
         const isHigh = entry.cluster_label === "CLUSTER-HIGH" || entry.effective_security_class === "HIGH";
         return `
           <tr>
+            <td><code style="color:var(--brand-cyan);font-weight:600;">#${entry.packet_index ?? 1}</code></td>
+            <td><span class="badge badge-neutral">Pass ${entry.repetition_index ?? 1}</span></td>
             <td><code>${entry.record_id}</code></td>
             <td><span class="${isHigh ? 'badge-cluster-high' : 'badge-cluster-low'}">${entry.cluster_label || ('Cluster ' + entry.kmeans_cluster_id)}</span></td>
             <td><span class="badge ${entry.effective_security_class === 'HIGH' ? 'badge-high' : 'badge-low'}">${entry.effective_security_class}</span></td>
@@ -1611,19 +1646,34 @@ document.addEventListener("DOMContentLoaded", () => {
       window.location.href = "/api/pipeline/export/clustered.csv";
     });
   }
+  function downloadBatteryCsvSafely() {
+    const totalSimPkts = currentBatterySimulation?.total_packets_simulated ?? 
+      (currentBatterySimulation?.records ? currentBatterySimulation.records.length : 0);
+    
+    if (totalSimPkts > 5000) {
+      const proceed = window.confirm(
+        `Export Safeguard Notice:\n\n` +
+        `The current battery simulation contains ${totalSimPkts.toLocaleString()} simulated packets across repeated passes.\n\n` +
+        `All ${totalSimPkts.toLocaleString()} rows will be exported without silent truncation. Proceed with download?`
+      );
+      if (!proceed) return;
+    }
+    window.location.href = "/api/pipeline/export/battery.csv";
+  }
+
   if (btnDownloadBatteryCsv) {
     btnDownloadBatteryCsv.addEventListener("click", () => {
-      window.location.href = "/api/pipeline/export/battery.csv";
+      downloadBatteryCsvSafely();
     });
   }
   if (btnDownloadBatterySimCsvTab2) {
     btnDownloadBatterySimCsvTab2.addEventListener("click", () => {
-      window.location.href = "/api/pipeline/export/battery.csv";
+      downloadBatteryCsvSafely();
     });
   }
   if (btnDownloadBatteryTableCsv) {
     btnDownloadBatteryTableCsv.addEventListener("click", () => {
-      window.location.href = "/api/pipeline/export/battery.csv";
+      downloadBatteryCsvSafely();
     });
   }
   if (btnDownloadRoutingCsv) {

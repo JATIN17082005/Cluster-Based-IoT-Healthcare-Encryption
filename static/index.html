@@ -601,14 +601,20 @@
           <div style="display:flex;align-items:center;gap:0.4rem;">
             <label for="battery-duration-select" style="font-size:0.78rem;color:var(--text-secondary);font-weight:600;">Operating Duration / Cadence:</label>
             <select id="battery-duration-select" style="background:var(--bg-surface-1);border:1px solid var(--border-subtle);color:#fff;border-radius:var(--radius-sm);padding:0.3rem 0.5rem;font-size:0.8rem;">
-              <option value="1" selected>Single Batch (1&times; &bull; Exact current records)</option>
-              <option value="100">100 Batches (5,000 pkts &bull; ~100s at 50Hz)</option>
-              <option value="3600">1 Hour continuous (180,000 pkts at 50Hz)</option>
-              <option value="86400">24 Hours continuous (4,320,000 pkts at 50Hz)</option>
+              <option value="1" selected>Single Batch (1&times; &bull; Exact current records &bull; 1.0s @ 50Hz)</option>
+              <option value="2">2 Batches (2&times; &bull; 100 pkts &bull; 2.0s @ 50Hz)</option>
+              <option value="5">5 Batches (5&times; &bull; 250 pkts &bull; 5.0s @ 50Hz)</option>
+              <option value="10">10 Batches (10&times; &bull; 500 pkts &bull; 10.0s @ 50Hz)</option>
+              <option value="50">50 Batches (50&times; &bull; 2,500 pkts &bull; 50.0s @ 50Hz)</option>
+              <option value="100">100 Batches (100&times; &bull; 5,000 pkts &bull; ~100s @ 50Hz)</option>
+              <option value="500">500 Batches (500&times; &bull; 25,000 pkts &bull; ~500s @ 50Hz)</option>
+              <option value="1000">1,000 Batches (1,000&times; &bull; 50,000 pkts &bull; ~16.7 min @ 50Hz)</option>
             </select>
           </div>
         </div>
-        <div style="display:flex;gap:0.5rem;align-items:center;">
+        <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;">
+          <span id="tab2-battery-reps-badge" class="badge badge-aes" style="font-family:var(--font-mono);font-size:0.72rem;display:none;"></span>
+          <span id="tab2-battery-time-badge" class="badge badge-aes" style="font-family:var(--font-mono);font-size:0.72rem;display:none;"></span>
           <span id="tab2-battery-status-tag" class="badge badge-aes" style="font-family:var(--font-mono);font-size:0.72rem;">STANDBY</span>
           <button id="btn-download-battery-sim-csv-tab2" class="btn btn-outline" style="font-size:0.75rem;padding:0.3rem 0.65rem;" disabled>
             Download Battery Simulation CSV
@@ -1406,6 +1412,8 @@
           <table class="data-table" style="font-size:0.78rem;margin:0;">
             <thead>
               <tr style="position:sticky;top:0;background:var(--bg-surface-2);z-index:2;">
+                <th>Pkt #</th>
+                <th>Pass</th>
                 <th>Record ID</th>
                 <th>Cluster</th>
                 <th>Effective Security</th>
@@ -1421,7 +1429,7 @@
             </thead>
             <tbody id="battery-simulation-table-body">
               <tr>
-                <td colspan="11" style="text-align:center;padding:2rem;color:var(--text-muted);">
+                <td colspan="13" style="text-align:center;padding:2rem;color:var(--text-muted);">
                   No battery simulation executed yet. Click <strong>"Simulate Battery on Current Dataset"</strong> to compute per-record energy and cumulative battery drain.
                 </td>
               </tr>

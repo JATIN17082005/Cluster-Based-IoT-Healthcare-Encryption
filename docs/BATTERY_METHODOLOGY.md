@@ -209,3 +209,28 @@ The system enforces clear evidence tier labeling across all modes:
 - **Tier C — Instrument Measured Lab (`INSTRUMENT_MEASURED_LAB`):** Time-series power samples imported via `/api/power/import` from calibrated laboratory measurement tools (Monsoon, Otii, Keysight).
 - **Hardware Serial Interface (`INTERFACE_PLACEHOLDER_HARDWARE_PENDING`):** The `HardwareSerialPowerAdapter` class provides a defined interface for real-time serial DAQ boards (such as INA219/INA226). In the absence of attached physical hardware, it reports placeholder status and safely directs the user to CSV laboratory log imports.
 
+---
+
+## 10. Multi-Pass Repeated-Batch Simulation & Export Safeguards
+
+When simulating longer operating durations across multiple dataset repetitions ($R \ge 1$ passes):
+
+### A. Monotonic Multi-Pass Progression
+- For $R = 1$, per-record behavior tracks the single batch pass ($N$ packets).
+- For $R > 1$, every pass $r \in [1, R]$ is explicitly simulated across all $N$ records ($N \times R$ total packets).
+- Cumulative baseline and adaptive energies ($E_{\text{cumul, base}}$ and $E_{\text{cumul, adapt}}$) advance continuously and monotonically across all passes without resetting at pass boundaries.
+- The final entry's cumulative values ($r = R, i = N$) mathematically match the summary totals:
+  $$E_{\text{cumul, final}} = R \times E_{\text{batch}} = E_{\text{total}}$$
+  $$\text{Remaining Battery \%}_{\text{final}} = 100.0 - \left(\frac{E_{\text{total}}}{E_{\text{rail, usable}}}\right) \times 100.0$$
+
+### B. Global Packet and Repetition Indexing
+Each simulated packet output and CSV row includes:
+- `packet_index`: Monotonically increasing 1-indexed counter ($1 \dots N \times R$).
+- `repetition_index`: Current pass index ($1 \dots R$).
+- `record_id` and `pipeline_run_id`: Exact provenance linkage to the active synthetic run.
+
+### C. Export Safeguards & Zero Silent Truncation
+- **Safe Limit Safeguard:** Workloads exceeding $50,000$ simulated packets ($N \times R > 50,000$) are rejected with HTTP 422 to prevent memory exhaustion on embedded or shared servers.
+- **UI Performance Protection:** The browser dashboard displays a preview of the first 100 rows with an explanatory note when total packets exceed 100, while preserving the complete dataset in memory.
+- **Full CSV Fidelity:** When downloaded, `/api/pipeline/export/battery.csv` exports all $N \times R$ records with zero silent truncation. If $N \times R > 5,000$, the UI prompts the user with an export confirmation dialog stating the exact row count.
+

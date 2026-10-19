@@ -231,6 +231,8 @@ class PerRecordBatteryEntry(BaseModel):
     """Detailed energy accounting and cumulative battery drain for a single record."""
     pipeline_run_id: str
     record_id: str
+    repetition_index: int = 1
+    packet_index: int = 1
     kmeans_cluster_id: int
     cluster_label: str
     effective_security_class: str
@@ -260,21 +262,27 @@ class BatterySimulationResult(BaseModel):
     simulated_repetitions: int = 1
     simulated_operating_seconds: float
     cadence_period_ms: float = 20.0
+    reporting_frequency_hz: Optional[float] = None
     starting_capacity_mah: float
+    usable_capacity_mah: Optional[float] = None
     usable_rail_energy_joules: float
     baseline_batch_energy_joules: float
     adaptive_batch_energy_joules: float
     baseline_total_energy_joules: float
     adaptive_total_energy_joules: float
     baseline_final_remaining_percent: float
+    adaptive_final_remaining_percent: float
     energy_saving_percent: float
     records: List[PerRecordBatteryEntry]
     record_count: Optional[int] = None
+    total_packets_simulated: Optional[int] = None
     baseline_remaining_pct: Optional[float] = None
     adaptive_remaining_pct: Optional[float] = None
     energy_savings_pct: Optional[float] = None
     battery_nominal_mah: Optional[float] = None
     duration_batches: Optional[int] = None
+    derivation_formula: Optional[str] = None
+    cadence_disclaimer: Optional[str] = None
 
 
 
