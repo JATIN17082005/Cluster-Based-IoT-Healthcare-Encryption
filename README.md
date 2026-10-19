@@ -2,7 +2,7 @@
 
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/Backend-FastAPI-009688.svg)](https://fastapi.tiangolo.com/)
-[![Tests](https://img.shields.io/badge/Tests-88%2F88%20Passing-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/Tests-96%2F96%20Passing-brightgreen.svg)]()
 [![scikit-learn](https://img.shields.io/badge/ML-scikit--learn%20K--Means-orange.svg)](https://scikit-learn.org/)
 [![License](https://img.shields.io/badge/License-Academic%20Research-lightgrey.svg)]()
 
@@ -378,7 +378,8 @@ c:\Cluster based IoT data encryption\
 │   ├── app.js                         # State management, K-Means table, animations, API client
 │   └── styles.css                     # Premium dark-mode design system & responsive CSS
 │
-├── tests/                             # Automated Test Suite (79 Tests, 100% Pass)
+├── tests/                             # Automated Test Suite (96 Tests, 100% Pass)
+│   ├── test_staged_faculty_workflow.py# 7-stage sequential interactive workflow and intermediate exports
 │   ├── test_kmeans_clustering.py      # Feature engineering, K-Means, guardrail overrides
 │   ├── test_pipeline_provenance.py    # 7-stage lineage, CSV/JSON stage exports, run ID
 │   ├── test_battery_model_validation.py # Evidence tiers, capacity formula, non-overlap math
@@ -392,6 +393,7 @@ c:\Cluster based IoT data encryption\
 │   └── test_phase8_audit_and_validation.py # Multi-rep stats, formulas, timing isolation
 │
 ├── scripts/                           # Headless Utilities & Browser Tests
+│   ├── test_faculty_workflow_browser.py # Playwright E2E interactive 7-stage faculty workflow test
 │   ├── test_kmeans_and_provenance_browser.py # Playwright E2E verification of ML pipeline & Sub-Panel G
 │   ├── test_battery_scenarios_browser.py # Playwright automated battery test suite
 │   ├── test_browser_e2e.py            # Full Playwright end-to-end browser verification
@@ -468,16 +470,26 @@ The dashboard is structured into five accessible tabs designed to communicate th
 │ Header Strip  │ Backend Health • Dev Keys • Epistemic Provenance Badge │
 ├───────────────┴────────────────────────────────────────────────────────┤
 │  [Tab 1: Overview & Live Demo]                                         │
+│  • Interactive 3-Button Faculty Workflow:                              │
+│    1. "1. Generate Synthetic Data" (Pristine raw telemetry snapshot)   │
+│    2. "2. Run ML Clustering" (sklearn KMeans + Clinical Guardrail)     │
+│    3. "3. Simulate Battery on Current Dataset" (Exact records math)    │
+│  • Executable ML Model Source File Callout (src/kmeans_clusterer.py)   │
+│  • 5-View Stage Switcher:                                              │
+│    - View 1: Raw Telemetry Dataset (Stage 1)                           │
+│    - View 2: Feature Engineering Matrix (Stage 2, 6D, Zero Leakage)    │
+│    - View 3: Clustered & Safety Guardrails (Stage 3/4)                 │
+│    - View 4: Per-Record Battery Simulation (Stage 4)                   │
+│    - View 5: Encryption Routing & Verification (Stage 5/6)             │
 │  • 4 Dynamic KPI Cards (Records, High/Low Split, Mean Latency, Energy) │
 │  • Interactive 7-Stage Pipeline Inspector with Clickable Stage Drawers │
-│  • Seeded Workload Generator & Paired Benchmark Execution              │
-│  • Synthetic Healthcare Dataset & Provenance Lineage:                  │
-│    - Metadata Ribbon (Run ID, Seed, Agreement Rate, Guardrail Count)   │
-│    - Clinical Methodology Accordion (Distributions & Thresholds)       │
-│    - 11-Column Live Table (Search, Filters, Pagination, Stage Exports) │
+│  • Metadata Ribbon (Run ID, Seed, Agreement Rate, Guardrail Count)     │
 │  • Live Security Tamper Rejection Demo (Bit-Flip Injection)            │
 ├────────────────────────────────────────────────────────────────────────┤
-│  [Tab 2: Comparison & Battery Lab]                                    │
+│  [Tab 2: Battery Lab & Simulation]                                     │
+│  • Dedicated Action Bar: Simulate Battery on Current Dataset (1x-100x) │
+│  • Dedicated Per-Record Battery Simulation Table (50 simulated vitals) │
+│  • Download Battery Simulation CSV Button                              │
 │  • Hardware Scenario Selector (Desktop vs. Target MCU Simulation)      │
 │  • Dual Animated SVG Battery Meters with Left-to-Right Drain           │
 │  • Simulation Controls (Start, Pause, Resume, Reset, Replay)           │
@@ -505,7 +517,7 @@ The dashboard is structured into five accessible tabs designed to communicate th
 │  [Tab 5: Run History & Evidence Exports]                               │
 │  • Persistent SQLite Historical Run Log                                │
 │  • Side-by-side run comparative delta viewer                           │
-│  • One-click export to CSV and JSON formats                            │
+│  • One-click export to CSV and JSON formats for all 7 pipeline stages  │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -513,7 +525,7 @@ The dashboard is structured into five accessible tabs designed to communicate th
 
 ## 11. Automated Verification & Test Suite
 
-The repository includes a comprehensive automated test suite consisting of **79 test cases** covering every functional requirement, mathematical calculation, ML clustering property, edge case, and boundary condition.
+The repository includes a comprehensive automated test suite consisting of **96 test cases** covering every functional requirement, mathematical calculation, ML clustering property, edge case, and boundary condition.
 
 ### Running Pytest
 ```bash
@@ -523,7 +535,17 @@ python -m pytest tests/ -v
 ```text
 ============================= test session starts =============================
 platform win32 -- Python 3.14.5, pytest-9.1.1, pluggy-1.6.0
-collected 79 items
+collected 96 items
+
+tests/test_staged_faculty_workflow.py (8 Tests)
+  ✓ test_stage1_generate_raw_and_immediate_csv_download   PASSED
+  ✓ test_stage2_clustering_fails_without_dataset          PASSED
+  ✓ test_stage2_kmeans_model_file_and_features            PASSED
+  ✓ test_stage3_kmeans_execution_and_clustered_csv        PASSED
+  ✓ test_stage4_battery_simulation_fails_before_clustering PASSED
+  ✓ test_stage4_battery_simulation_on_current_dataset_math PASSED
+  ✓ test_stage5_and_6_encryption_and_receiver_verification PASSED
+  ✓ test_stage7_stale_data_invalidation_on_new_generation PASSED
 
 tests/test_battery_model_validation.py (5 Tests)
   ✓ test_battery_energy_model_endpoint                    PASSED
@@ -532,9 +554,11 @@ tests/test_battery_model_validation.py (5 Tests)
   ✓ test_non_overlapping_execution_intervals              PASSED
   ✓ test_evidence_hierarchy_separation                    PASSED
 
-tests/test_kmeans_clustering.py (6 Tests)
+tests/test_kmeans_clustering.py (8 Tests)
   ✓ test_feature_extractor_no_label_leakage               PASSED
   ✓ test_feature_extractor_all_modalities                 PASSED
+  ✓ test_modality_specific_normalization_invariance       PASSED
+  ✓ test_calibration_and_held_out_evaluation_protocol     PASSED
   ✓ test_kmeans_pipeline_fit_and_clusters                 PASSED
   ✓ test_safety_guardrail_prevents_high_downgrade         PASSED
   ✓ test_kmeans_deterministic_reproducibility             PASSED
@@ -626,11 +650,14 @@ tests/test_phase8_audit_and_validation.py (9 Tests)
   ✓ test_security_audit_key_sizes_nonces_and_tampering    PASSED
   ✓ test_full_pipeline_api_and_export_consistency         PASSED
 
-======================== 79 passed in 3.94s ========================
+======================== 96 passed in 4.35s ========================
 ```
 
 ### Running Browser E2E Tests (Playwright)
 ```bash
+# Verify interactive 7-stage faculty demonstration workflow, buttons, tables, and CSV downloads
+python scripts/test_faculty_workflow_browser.py
+
 # Verify K-Means clustering, dataset transparency table, and battery Sub-Panel G
 python scripts/test_kmeans_and_provenance_browser.py
 
