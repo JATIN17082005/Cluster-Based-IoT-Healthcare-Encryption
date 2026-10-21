@@ -11,6 +11,9 @@ document.addEventListener("DOMContentLoaded", () => {
   let isRunning = false;
   let lastComparisonData = null;
   let pipelineRunId = null;
+  let currentDatasetSeed = null;
+  let generationRequestSeq = 0;
+  let clusteringRequestSeq = 0;
   let pipelineAllRecords = [];
   let pipelineAllFeatures = [];
   let pipelineDiagnostics = null;
@@ -478,7 +481,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
       drawerStageDiagnostics.innerHTML = `
         <div><strong>Pipeline Run ID:</strong> <code style="color:var(--brand-cyan);">${pipelineRunId || '&mdash;'}</code></div>
-        <div><strong>Deterministic Seed:</strong> <span style="font-weight:700;">${inputSeed ? inputSeed.value : 42}</span></div>
+        <div><strong>Generation Seed:</strong> <span style="font-weight:700;">${currentDatasetSeed !== null ? currentDatasetSeed : (inputSeed && inputSeed.value ? inputSeed.value : 'Random (Auto)')}</span></div>
         <div><strong>Record Count:</strong> ${pipelineAllRecords.length} records</div>
         <div><strong>PRNG Engine:</strong> Python Mersenne Twister (Bitwise reproducible)</div>`;
     } else if (stepNum === 2) {
@@ -811,14 +814,21 @@ document.addEventListener("DOMContentLoaded", () => {
 
   async function generateData() {
     const count = parseInt(inputCount.value, 10) || 50;
-    const seed = parseInt(inputSeed.value, 10) || 42;
+    const seedVal = inputSeed?.value ? inputSeed.value.trim() : "";
+    const explicitSeed = seedVal !== "" ? parseInt(seedVal, 10) : null;
+    const reqSeq = ++generationRequestSeq;
 
     highlightPipelineStep(1);
     try {
+      const payload = { count };
+      if (explicitSeed !== null && !isNaN(explicitSeed)) {
+        payload.seed = explicitSeed;
+      }
+
       const resp = await fetch("/api/pipeline/generate-raw", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ count, seed }),
+        body: JSON.stringify(payload),
       });
       let data;
       if (!resp.ok) {
@@ -826,7 +836,7 @@ document.addEventListener("DOMContentLoaded", () => {
         const fallbackResp = await fetch("/api/demo/generate", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ count, seed, run_clustering: false }),
+          body: JSON.stringify({ ...payload, run_clustering: false }),
         });
         if (!fallbackResp.ok) throw new Error("Failed to generate raw synthetic data");
         data = await fallbackResp.json();
@@ -834,7 +844,14 @@ document.addEventListener("DOMContentLoaded", () => {
         data = await resp.json();
       }
 
-      pipelineRunId = data.pipeline_run_id || null;
+      // Race condition check: ignore slower responses from older clicks
+      if (reqSeq !== generationRequestSeq) {
+        console.warn("Ignoring stale generation response seq", reqSeq, "active:", generationRequestSeq);
+        return null;
+      }
+
+      pipelineRunId = data.dataset_id || data.pipeline_run_id || null;
+      currentDatasetSeed = data.seed !== undefined ? data.seed : null;
       pipelineAllRecords = data.raw_records || data.all_records || [];
       pipelineAllFeatures = data.features || data.all_features || [];
       currentRecords = pipelineAllRecords;
@@ -845,11 +862,11 @@ document.addEventListener("DOMContentLoaded", () => {
       currentReceiverResults = null;
 
       // Update Dataset Provenance Ribbon
-      if (datasetPipelineRunId) datasetPipelineRunId.textContent = data.pipeline_run_id || "PIPE-STANDBY";
-      if (metaRunId) metaRunId.textContent = data.pipeline_run_id || "&mdash;";
-      if (metaSeed) metaSeed.textContent = data.seed;
-      if (metaTotalCount) metaTotalCount.textContent = data.count;
-      if (metaTimestamp) metaTimestamp.textContent = data.generated_at ? data.generated_at.split("T")[1].replace("Z", "") : "&mdash;";
+      if (datasetPipelineRunId) datasetPipelineRunId.textContent = pipelineRunId || "PIPE-STANDBY";
+      if (metaRunId) metaRunId.textContent = pipelineRunId || "&mdash;";
+      if (metaSeed) metaSeed.textContent = currentDatasetSeed !== null ? currentDatasetSeed : "&mdash;";
+      if (metaTotalCount) metaTotalCount.textContent = data.count || pipelineAllRecords.length;
+      if (metaTimestamp) metaTimestamp.textContent = data.generated_at ? data.generated_at.split("T")[1].replace("Z", "").split(".")[0] : "&mdash;";
       if (metaKmeansAgreement) metaKmeansAgreement.textContent = "Awaiting ML Clustering (Stage 3)";
       if (metaGuardrailOverrides) metaGuardrailOverrides.textContent = "0 (Awaiting Clustering)";
       if (clusteringStageStatusBadge) {
@@ -857,10 +874,10 @@ document.addEventListener("DOMContentLoaded", () => {
         clusteringStageStatusBadge.className = "badge badge-low";
       }
 
-      // Download buttons state
+      // Download buttons state: only Raw is enabled immediately
       if (btnDownloadRawCsv) btnDownloadRawCsv.disabled = false;
       if (btnDownloadRawJson) btnDownloadRawJson.disabled = false;
-      if (btnDownloadFeaturesCsv) btnDownloadFeaturesCsv.disabled = (pipelineAllFeatures.length === 0);
+      if (btnDownloadFeaturesCsv) btnDownloadFeaturesCsv.disabled = true;
       if (btnDownloadClusteredCsv) btnDownloadClusteredCsv.disabled = true;
       if (btnDownloadBatteryCsv) btnDownloadBatteryCsv.disabled = true;
       if (btnDownloadRoutingCsv) btnDownloadRoutingCsv.disabled = true;
@@ -875,11 +892,11 @@ document.addEventListener("DOMContentLoaded", () => {
       if (btnSimulateBatteryTab2) btnSimulateBatteryTab2.disabled = true;
 
       // Update KPIs & Distribution Summary
-      kpiRecordsVal.textContent = data.count;
+      kpiRecordsVal.textContent = data.count || pipelineAllRecords.length;
       statHighCount.textContent = "&mdash;";
       statLowCount.textContent = "&mdash;";
-      if (batchRecordCountBadge) batchRecordCountBadge.textContent = `${data.count} Records`;
-      if (explorerRecordsCountBadge) explorerRecordsCountBadge.textContent = `${data.count} Records`;
+      if (batchRecordCountBadge) batchRecordCountBadge.textContent = `${data.count || pipelineAllRecords.length} Records`;
+      if (explorerRecordsCountBadge) explorerRecordsCountBadge.textContent = `${data.count || pipelineAllRecords.length} Records`;
 
       // Reset receiver stats
       statSent.textContent = "0";
@@ -887,11 +904,18 @@ document.addEventListener("DOMContentLoaded", () => {
       if (statRejected) statRejected.textContent = "0";
       if (statRejected2) statRejected2.textContent = "0";
 
-      // Reset Battery Table in Tab 2
+      // Reset Battery Simulation visual meters and table
+      updateBatteryVisual("baseline", 100.0, 0.0, 1200.0);
+      updateBatteryVisual("adaptive", 100.0, 0.0, 1200.0);
+      const tab2RepsBadge = document.getElementById("tab2-battery-reps-badge");
+      const tab2TimeBadge = document.getElementById("tab2-battery-time-badge");
+      if (tab2RepsBadge) tab2RepsBadge.style.display = "none";
+      if (tab2TimeBadge) tab2TimeBadge.style.display = "none";
+
       if (batterySimulationTableBody) {
-        batterySimulationTableBody.innerHTML = `<tr><td colspan="11" style="text-align:center;padding:2rem;color:var(--text-muted);">No battery simulation executed yet. Click <strong>"Simulate Battery on Current Dataset"</strong> to compute per-record energy and cumulative battery drain.</td></tr>`;
+        batterySimulationTableBody.innerHTML = `<tr><td colspan="13" style="text-align:center;padding:2rem;color:var(--text-muted);">No battery simulation executed yet. Click <strong>"Simulate Battery on Current Dataset"</strong> to compute per-record energy and cumulative battery drain.</td></tr>`;
       }
-      if (batterySimLineageId) batterySimLineageId.textContent = data.pipeline_run_id || "PIPE-STANDBY";
+      if (batterySimLineageId) batterySimLineageId.textContent = pipelineRunId || "PIPE-STANDBY";
       if (tab2BatteryStatusTag) {
         tab2BatteryStatusTag.textContent = "STANDBY";
         tab2BatteryStatusTag.className = "badge badge-aes";
@@ -902,7 +926,7 @@ document.addEventListener("DOMContentLoaded", () => {
       renderRecordExplorer(currentRecords);
       renderDrawerStageContent(activeDrawerStep);
 
-      showToast(`Stage 1 Complete: Raw dataset generated (${data.count} records). Lineage: ${data.pipeline_run_id}. Click 'Run ML Clustering'.`, "info");
+      showToast(`Stage 1 Complete: Fresh synthetic dataset generated (${data.count} records). Dataset ID: ${pipelineRunId}. Click 'Run ML Clustering'.`, "info");
       return data;
     } catch (err) {
       alert("Error generating data: " + err.message);
@@ -924,6 +948,7 @@ document.addEventListener("DOMContentLoaded", () => {
       clusteringStageStatusBadge.className = "badge status-badge-regression";
     }
 
+    const cReqSeq = ++clusteringRequestSeq;
     try {
       const resp = await fetch("/api/pipeline/cluster", {
         method: "POST",
@@ -935,6 +960,12 @@ document.addEventListener("DOMContentLoaded", () => {
         throw new Error(err.detail || "Clustering execution failed");
       }
       const data = await resp.json();
+
+      // Check if another generation or clustering occurred while waiting
+      if (cReqSeq !== clusteringRequestSeq || (data.pipeline_run_id && data.pipeline_run_id !== pipelineRunId)) {
+        console.warn("Ignoring stale clustering response for older dataset", data.pipeline_run_id, "current:", pipelineRunId);
+        return null;
+      }
 
       pipelineAllRecords = data.clustered_records || data.all_records || [];
       pipelineAllFeatures = data.all_features || data.features || pipelineAllFeatures;

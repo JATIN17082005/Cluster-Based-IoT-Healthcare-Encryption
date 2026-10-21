@@ -267,8 +267,8 @@
             <input type="number" id="input-count" value="50" min="5" max="500" step="5">
           </div>
           <div class="control-field">
-            <label for="input-seed">Seed:</label>
-            <input type="number" id="input-seed" value="42" min="0">
+            <label for="input-seed">Seed (Optional):</label>
+            <input type="number" id="input-seed" placeholder="Random (Auto)" min="0">
           </div>
           <div class="control-field">
             <label for="input-reps">Repetitions:</label>
@@ -391,10 +391,10 @@
 
         <!-- Provenance & Lineage Details Ribbon -->
         <div style="background:var(--bg-surface-2);border:1px solid var(--border-subtle);border-radius:var(--radius-sm);padding:0.65rem 1rem;font-size:0.8rem;display:flex;gap:1.5rem;flex-wrap:wrap;align-items:center;margin-bottom:1rem;">
-          <div><strong>Lineage Run ID:</strong> <span id="meta-run-id" style="color:var(--brand-cyan);font-family:var(--font-mono);">&mdash;</span></div>
-          <div><strong>Seed:</strong> <span id="meta-seed" style="color:#fff;font-weight:700;">42</span></div>
-          <div><strong>Generated Records:</strong> <span id="meta-total-count" style="color:var(--status-success);font-weight:700;">0</span></div>
-          <div><strong>Timestamp:</strong> <span id="meta-timestamp" style="color:var(--text-muted);">&mdash;</span></div>
+          <div><strong>Dataset ID:</strong> <span id="meta-run-id" style="color:var(--brand-cyan);font-family:var(--font-mono);">&mdash;</span></div>
+          <div><strong>Seed:</strong> <span id="meta-seed" style="color:#fff;font-weight:700;">&mdash;</span></div>
+          <div><strong>Records:</strong> <span id="meta-total-count" style="color:var(--status-success);font-weight:700;">0</span></div>
+          <div><strong>Generation Time:</strong> <span id="meta-timestamp" style="color:var(--text-muted);">&mdash;</span></div>
           <div><strong>Within-Run Rule Agreement:</strong> <span id="meta-kmeans-agreement" style="color:var(--brand-cyan);font-weight:700;" title="Within-run agreement with synthetic rule-based sensitivity labels (not independent clinical accuracy)">&mdash;</span></div>
           <div><strong>Guardrail Overrides:</strong> <span id="meta-guardrail-overrides" style="color:var(--status-danger);font-weight:700;">0</span></div>
         </div>

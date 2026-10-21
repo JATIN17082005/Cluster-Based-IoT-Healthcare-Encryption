@@ -2,7 +2,7 @@
 
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/Backend-FastAPI-009688.svg)](https://fastapi.tiangolo.com/)
-[![Tests](https://img.shields.io/badge/Tests-100%2F100%20Passing-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/Tests-105%2F105%20Passing-brightgreen.svg)]()
 [![scikit-learn](https://img.shields.io/badge/ML-scikit--learn%20K--Means-orange.svg)](https://scikit-learn.org/)
 [![License](https://img.shields.io/badge/License-Academic%20Research-lightgrey.svg)]()
 
@@ -378,7 +378,7 @@ c:\Cluster based IoT data encryption\
 │   ├── app.js                         # State management, K-Means table, animations, API client
 │   └── styles.css                     # Premium dark-mode design system & responsive CSS
 │
-├── tests/                             # Automated Test Suite (100 Tests, 100% Pass)
+├── tests/                             # Automated Test Suite (105 Tests, 100% Pass)
 │   ├── test_staged_faculty_workflow.py# 7-stage sequential interactive workflow and intermediate exports
 │   ├── test_kmeans_clustering.py      # Feature engineering, K-Means, guardrail overrides
 │   ├── test_pipeline_provenance.py    # 7-stage lineage, CSV/JSON stage exports, run ID
@@ -525,7 +525,7 @@ The dashboard is structured into five accessible tabs designed to communicate th
 
 ## 11. Automated Verification & Test Suite
 
-The repository includes a comprehensive automated test suite consisting of **100 test cases** covering every functional requirement, mathematical calculation, ML clustering property, edge case, and boundary condition.
+The repository includes a comprehensive automated test suite consisting of **105 test cases** covering every functional requirement, mathematical calculation, ML clustering property, edge case, and boundary condition.
 
 ### Running Pytest
 ```bash
@@ -535,9 +535,9 @@ python -m pytest tests/ -v
 ```text
 ============================= test session starts =============================
 platform win32 -- Python 3.14.5, pytest-9.1.1, pluggy-1.6.0
-collected 100 items
+collected 105 items
 
-tests/test_staged_faculty_workflow.py (12 Tests)
+tests/test_staged_faculty_workflow.py (17 Tests)
   ✓ test_stage1_generate_raw_and_immediate_csv_download   PASSED
   ✓ test_stage2_clustering_fails_without_dataset          PASSED
   ✓ test_stage2_kmeans_model_file_and_features            PASSED
@@ -550,6 +550,11 @@ tests/test_staged_faculty_workflow.py (12 Tests)
   ✓ test_repeated_batch_battery_simulation_repetitions_2  PASSED
   ✓ test_repeated_batch_battery_simulation_repetitions_10_duration PASSED
   ✓ test_repeated_batch_battery_safeguard_limit           PASSED
+  ✓ test_consecutive_generations_create_different_datasets_without_seed PASSED
+  ✓ test_clustering_classifies_latest_generated_dataset   PASSED
+  ✓ test_dataset_id_traceability_across_all_stages_and_exports PASSED
+  ✓ test_generation_invalidates_stale_active_stage_results_and_downloads PASSED
+  ✓ test_explicit_seeds_allow_deterministic_reproducible_data PASSED
 
 tests/test_battery_model_validation.py (5 Tests)
   ✓ test_battery_energy_model_endpoint                    PASSED
@@ -654,7 +659,7 @@ tests/test_phase8_audit_and_validation.py (9 Tests)
   ✓ test_security_audit_key_sizes_nonces_and_tampering    PASSED
   ✓ test_full_pipeline_api_and_export_consistency         PASSED
 
-======================== 100 passed in 4.69s ========================
+======================== 105 passed in 5.27s ========================
 ```
 
 ### Running Browser E2E Tests (Playwright)

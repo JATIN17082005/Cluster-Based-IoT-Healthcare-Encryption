@@ -5,6 +5,7 @@ import io
 import csv
 import json
 import time
+import secrets
 from typing import Optional, List, Dict, Any, Tuple
 from datetime import datetime, timezone
 from pathlib import Path
@@ -88,6 +89,9 @@ current_feature_vectors: List[FeatureVector] = []
 current_battery_simulation: Optional[Dict[str, Any]] = None
 current_encryption_results: Optional[List[Dict[str, Any]]] = None
 current_receiver_results: Optional[List[Dict[str, Any]]] = None
+current_dataset_id: Optional[str] = None
+previous_dataset_records: Optional[List[SensorRecord]] = None
+dataset_generation_sequence: int = 0
 
 
 class McuScenarioRequest(BaseModel):
@@ -101,14 +105,16 @@ class McuScenarioRequest(BaseModel):
 
 class GenerateRequest(BaseModel):
     count: int = Field(default=50, ge=1, le=1000)
-    seed: int = Field(default=42, ge=0)
+    seed: Optional[int] = Field(default=None, ge=0)
     run_clustering: Optional[bool] = None
+    dataset_id: Optional[str] = None
 
 
 class BatterySimulateRequest(BaseModel):
     repetitions: int = Field(default=1, ge=1, le=1000000)
     profile: Optional[str] = None
     radio_tx_ms: Optional[float] = None
+    dataset_id: Optional[str] = None
 
 
 class BenchmarkRunRequest(BaseModel):
@@ -334,18 +340,55 @@ def _get_generation_methodology(seed: int, count: int) -> Dict[str, Any]:
     }
 
 
-def _generate_raw_dataset_core(count: int, seed: int) -> Tuple[str, List[SensorRecord], Dict[str, Any]]:
-    global current_raw_records, current_demo_records, current_demo_seed, current_pipeline_run_id
+def _generate_raw_dataset_core(count: int, seed: Optional[int] = None) -> Tuple[str, List[SensorRecord], Dict[str, Any]]:
+    global current_raw_records, current_demo_records, current_demo_seed, current_pipeline_run_id, current_dataset_id
     global current_clustering_result, current_feature_vectors, current_battery_simulation
     global current_encryption_results, current_receiver_results
+    global previous_dataset_records, dataset_generation_sequence
 
-    pipeline_run_id = f"PIPE-S{seed}-{int(time.time())}"
-    gen = SyntheticDataGenerator(seed=seed)
-    records = gen.generate_batch(
-        count=count,
-        classifier=runner.classifier,
-    )
+    dataset_generation_sequence += 1
+    explicit_seed = seed is not None
+
+    # Determine generation seed with duplicate prevention
+    max_attempts = 15
+    records: List[SensorRecord] = []
+    used_seed = seed
+
+    for attempt in range(max_attempts):
+        if not explicit_seed:
+            used_seed = secrets.randbelow(899999) + 100000
+        else:
+            used_seed = seed
+
+        gen = SyntheticDataGenerator(seed=used_seed)
+        generated_batch = gen.generate_batch(
+            count=count,
+            classifier=runner.classifier,
+        )
+
+        # Prevent accidental reuse: check against previous dataset if not explicit seed
+        if previous_dataset_records is not None and not explicit_seed and len(previous_dataset_records) == len(generated_batch):
+            is_dup = all(
+                r1.record_type == r2.record_type and abs(r1.value - r2.value) < 1e-5
+                for r1, r2 in zip(generated_batch, previous_dataset_records)
+            )
+            if is_dup:
+                continue
+
+        records = generated_batch
+        break
+
+    if not records:
+        gen = SyntheticDataGenerator(seed=used_seed)
+        records = gen.generate_batch(count=count, classifier=runner.classifier)
+
+    # Unique dataset_id and pipeline_run_id
+    unique_suffix = f"{int(time.time() * 1000)}-{secrets.token_hex(3).upper()}"
+    pipeline_run_id = f"PIPE-S{used_seed}-{unique_suffix}"
+    dataset_id = pipeline_run_id
+
     for r in records:
+        r.dataset_id = dataset_id
         r.pipeline_run_id = pipeline_run_id
         r.kmeans_cluster_id = None
         r.cluster_label = None
@@ -355,24 +398,29 @@ def _generate_raw_dataset_core(count: int, seed: int) -> Tuple[str, List[SensorR
 
     current_raw_records = [r.model_copy() for r in records]
     current_demo_records = [r.model_copy() for r in records]
-    current_demo_seed = seed
+    current_demo_seed = used_seed
     current_pipeline_run_id = pipeline_run_id
+    current_dataset_id = dataset_id
+    previous_dataset_records = [r.model_copy() for r in records]
+
+    # Invalidate all downstream state from previous datasets
     current_clustering_result = None
     current_feature_vectors = []
     current_battery_simulation = None
     current_encryption_results = None
     current_receiver_results = None
 
-    methodology = _get_generation_methodology(seed, len(records))
+    methodology = _get_generation_methodology(used_seed, len(records))
 
     snapshot_data = {
+        "dataset_id": dataset_id,
         "pipeline_run_id": pipeline_run_id,
-        "seed": seed,
+        "seed": used_seed,
         "record_count": len(records),
         "stage": "raw_dataset_generated",
         "methodology": methodology,
     }
-    run_store.save_pipeline_snapshot(pipeline_run_id, seed, len(records), snapshot_data)
+    run_store.save_pipeline_snapshot(pipeline_run_id, used_seed, len(records), snapshot_data)
     return pipeline_run_id, records, methodology
 
 
@@ -381,10 +429,12 @@ def generate_raw_pipeline_data(req: GenerateRequest):
     """Stage 1: Generate synthetic healthcare sensor records and immediately enable raw CSV export."""
     pipeline_run_id, records, methodology = _generate_raw_dataset_core(req.count, req.seed)
     return {
+        "dataset_id": pipeline_run_id,
         "pipeline_run_id": pipeline_run_id,
         "generated_at": datetime.now(timezone.utc).isoformat(),
-        "seed": req.seed,
+        "seed": current_demo_seed,
         "count": len(records),
+        "record_count": len(records),
         "high_cluster_count": 0,
         "low_cluster_count": 0,
         "records_preview": [r.model_dump() for r in records[:20]],
@@ -409,10 +459,12 @@ def generate_synthetic_data(req: GenerateRequest):
 
     if req.run_clustering is False:
         return {
+            "dataset_id": pipeline_run_id,
             "pipeline_run_id": pipeline_run_id,
             "generated_at": datetime.now(timezone.utc).isoformat(),
-            "seed": req.seed,
+            "seed": current_demo_seed,
             "count": len(records),
+            "record_count": len(records),
             "high_cluster_count": 0,
             "low_cluster_count": 0,
             "records_preview": [r.model_dump() for r in records[:20]],
@@ -446,10 +498,12 @@ def generate_synthetic_data(req: GenerateRequest):
     run_store.save_pipeline_snapshot(pipeline_run_id, req.seed, len(records), snapshot_data)
 
     return {
+        "dataset_id": pipeline_run_id,
         "pipeline_run_id": pipeline_run_id,
         "generated_at": datetime.now(timezone.utc).isoformat(),
-        "seed": req.seed,
+        "seed": current_demo_seed,
         "count": len(records),
+        "record_count": len(records),
         "high_cluster_count": high_group.record_count,
         "low_cluster_count": low_group.record_count,
         "records_preview": [r.model_dump() for r in clust_records[:20]],
@@ -503,9 +557,11 @@ def run_pipeline_clustering(config: Optional[KMeansConfig] = None):
 
     return {
         "status": "SUCCESS",
+        "dataset_id": current_pipeline_run_id,
         "pipeline_run_id": current_pipeline_run_id,
         "seed": current_demo_seed,
         "total_records": len(current_demo_records),
+        "record_count": len(current_demo_records),
         "high_cluster_count": high_group.record_count,
         "low_cluster_count": low_group.record_count,
         "clustering_config": clust_result.config.model_dump() if clust_result else None,
@@ -550,6 +606,8 @@ def simulate_battery_on_current_dataset(
         )
     except ValueError as ve:
         raise HTTPException(status_code=422, detail=str(ve))
+    sim_result["dataset_id"] = current_pipeline_run_id
+    sim_result["pipeline_run_id"] = current_pipeline_run_id
     current_battery_simulation = sim_result
     return sim_result
 
@@ -581,6 +639,8 @@ def get_current_battery_simulation(
         )
     except ValueError as ve:
         raise HTTPException(status_code=422, detail=str(ve))
+    sim_result["dataset_id"] = current_pipeline_run_id
+    sim_result["pipeline_run_id"] = current_pipeline_run_id
     current_battery_simulation = sim_result
     return sim_result
 
@@ -644,6 +704,7 @@ def encrypt_and_verify_current_dataset():
 
     return {
         "status": "SUCCESS",
+        "dataset_id": current_pipeline_run_id,
         "pipeline_run_id": current_pipeline_run_id,
         "records_count": len(enc_list),
         "aes_256_gcm_count": sum(1 for e in enc_list if e["adaptive_selected_algorithm"] == EncryptionAlgorithm.AES_256_GCM.value),
@@ -678,6 +739,7 @@ def get_current_pipeline():
 
     return {
         "has_data": True,
+        "dataset_id": current_pipeline_run_id,
         "pipeline_run_id": current_pipeline_run_id,
         "seed": current_demo_seed,
         "record_count": len(current_demo_records or current_raw_records),
@@ -1024,6 +1086,7 @@ def export_pipeline_stage_json(stage: str):
         raw_list = current_raw_records if current_raw_records else current_demo_records
         data = {
             "stage": "stage1_raw_dataset",
+            "dataset_id": run_id,
             "pipeline_run_id": run_id,
             "exported_at": datetime.now(timezone.utc).isoformat(),
             "record_count": len(raw_list),
@@ -1035,6 +1098,7 @@ def export_pipeline_stage_json(stage: str):
             raise HTTPException(status_code=400, detail="Feature vectors not yet computed. Run ML Clustering first.")
         data = {
             "stage": "stage2_features",
+            "dataset_id": run_id,
             "pipeline_run_id": run_id,
             "exported_at": datetime.now(timezone.utc).isoformat(),
             "feature_names": HealthcareFeatureExtractor.FEATURE_NAMES,
@@ -1047,6 +1111,7 @@ def export_pipeline_stage_json(stage: str):
             raise HTTPException(status_code=400, detail="Clustering has not been executed yet. Run ML Clustering first.")
         data = {
             "stage": "stage4_clustered_dataset",
+            "dataset_id": run_id,
             "pipeline_run_id": run_id,
             "exported_at": datetime.now(timezone.utc).isoformat(),
             "record_count": len(current_demo_records),
@@ -1064,6 +1129,7 @@ def export_pipeline_stage_json(stage: str):
             current_battery_simulation = sim
         data = {
             "stage": "stage4_battery_simulation",
+            "dataset_id": run_id,
             "pipeline_run_id": run_id,
             "exported_at": datetime.now(timezone.utc).isoformat(),
             "simulation": sim,
@@ -1072,6 +1138,7 @@ def export_pipeline_stage_json(stage: str):
     elif stage_key in ["routing", "stage5", "stage5_routing"]:
         data = {
             "stage": "stage5_encryption_routing",
+            "dataset_id": run_id,
             "pipeline_run_id": run_id,
             "exported_at": datetime.now(timezone.utc).isoformat(),
             "records": current_encryption_results or [],
@@ -1082,6 +1149,7 @@ def export_pipeline_stage_json(stage: str):
             encrypt_and_verify_current_dataset()
         data = {
             "stage": "stage6_receiver_verification",
+            "dataset_id": run_id,
             "pipeline_run_id": run_id,
             "exported_at": datetime.now(timezone.utc).isoformat(),
             "records": current_receiver_results or [],
@@ -1097,6 +1165,7 @@ def export_pipeline_stage_json(stage: str):
         scen = model.calculate_scenario(len(current_demo_records), h_cnt, l_cnt)
         data = {
             "stage": "stage7_benchmark",
+            "dataset_id": run_id,
             "pipeline_run_id": run_id,
             "exported_at": datetime.now(timezone.utc).isoformat(),
             "scenario": scen,

@@ -50,6 +50,7 @@ class SensorRecord(BaseModel):
     cluster_id: Optional[str] = None
 
     # Lineage and ML K-Means clustering traceability
+    dataset_id: Optional[str] = None
     pipeline_run_id: Optional[str] = None
     kmeans_cluster_id: Optional[int] = None
     cluster_label: Optional[str] = None
@@ -115,6 +116,7 @@ class KMeansDiagnostics(BaseModel):
 class ClusteringResult(BaseModel):
     """Outcome of fitting and predicting with real K-Means on a dataset."""
     pipeline_run_id: str
+    dataset_id: Optional[str] = None
     config: KMeansConfig
     diagnostics: KMeansDiagnostics
     total_records: int
@@ -230,6 +232,7 @@ class McuHardwareScenarioConfig(BaseModel):
 class PerRecordBatteryEntry(BaseModel):
     """Detailed energy accounting and cumulative battery drain for a single record."""
     pipeline_run_id: str
+    dataset_id: Optional[str] = None
     record_id: str
     repetition_index: int = 1
     packet_index: int = 1
@@ -254,6 +257,7 @@ class PerRecordBatteryEntry(BaseModel):
 class BatterySimulationResult(BaseModel):
     """Result of running physics-based battery simulation on an active dataset."""
     pipeline_run_id: str
+    dataset_id: Optional[str] = None
     total_records: int
     high_sensitivity_count: int
     low_sensitivity_count: int

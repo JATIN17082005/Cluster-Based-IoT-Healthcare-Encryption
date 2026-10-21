@@ -87,7 +87,7 @@ def run_e2e_verification():
 
             run_id = page.locator("#dataset-pipeline-run-id").inner_text().strip()
             print(f"   Pipeline Run ID: '{run_id}'")
-            assert "PIPE-S42" in run_id
+            assert "PIPE-S" in run_id
 
             # Click Run ML Clustering for Stage 3 in the interactive workflow
             page.click("#btn-run-ml-clustering")

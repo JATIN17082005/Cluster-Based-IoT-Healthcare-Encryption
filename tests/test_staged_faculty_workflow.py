@@ -408,3 +408,169 @@ def test_repeated_batch_battery_safeguard_limit(client):
     with pytest.raises(ValueError, match="exceeds documented safe export limit"):
         model.simulate_battery_on_records(records, repetitions=600)
 
+
+
+def test_consecutive_generations_create_different_datasets_without_seed(client):
+    """Verify two consecutive Generate calls without an explicit seed produce different datasets
+    with distinct random seeds, different records, and identical requested schemas.
+    """
+    resp1 = client.post("/api/pipeline/generate-raw", json={"count": 50})
+    assert resp1.status_code == 200
+    data1 = resp1.json()
+
+    resp2 = client.post("/api/pipeline/generate-raw", json={"count": 50})
+    assert resp2.status_code == 200
+    data2 = resp2.json()
+
+    # 1. Dataset IDs and seeds must be different
+    assert data1["dataset_id"] != data2["dataset_id"]
+    assert data1["seed"] != data2["seed"]
+
+    # 2. Both retain requested count and schema
+    assert data1["count"] == 50
+    assert data2["count"] == 50
+    assert len(data1["all_records"]) == 50
+    assert len(data2["all_records"]) == 50
+
+    # 3. Records must contain different values
+    values1 = [r["value"] for r in data1["all_records"]]
+    values2 = [r["value"] for r in data2["all_records"]]
+    assert values1 != values2, "Consecutive generations must not produce duplicate sensor readings"
+
+
+def test_clustering_classifies_latest_generated_dataset(client):
+    """Verify that running ML clustering strictly classifies the most recently generated dataset,
+    not an earlier batch or a hardcoded set.
+    """
+    # Generation 1
+    resp1 = client.post("/api/pipeline/generate-raw", json={"count": 40, "seed": 101})
+    data1 = resp1.json()
+    id1 = data1["dataset_id"]
+
+    # Generation 2
+    resp2 = client.post("/api/pipeline/generate-raw", json={"count": 40, "seed": 202})
+    data2 = resp2.json()
+    id2 = data2["dataset_id"]
+    assert id1 != id2
+
+    # Run ML clustering
+    clust_resp = client.post("/api/pipeline/cluster")
+    assert clust_resp.status_code == 200
+    cdata = clust_resp.json()
+
+    # Must classify dataset 2
+    assert cdata["dataset_id"] == id2
+    assert cdata["pipeline_run_id"] == id2
+    assert cdata["total_records"] == 40
+
+    records = cdata["all_records"]
+    assert len(records) == 40
+    for r in records:
+        assert r["pipeline_run_id"] == id2
+        assert r["dataset_id"] == id2
+        assert r["record_id"].startswith("REC-S202-"), "Clustered record must trace to Generation 2 (seed 202)"
+
+
+def test_dataset_id_traceability_across_all_stages_and_exports(client):
+    """Verify that dataset_id correctly links raw data, features, clustered records,
+    battery simulation, and exports across the pipeline.
+    """
+    # Generate fresh random dataset
+    gen_resp = client.post("/api/pipeline/generate-raw", json={"count": 30})
+    assert gen_resp.status_code == 200
+    gen_data = gen_resp.json()
+    ds_id = gen_data["dataset_id"]
+    assert ds_id is not None
+
+    # 1. Raw exports link
+    raw_csv = client.get("/api/pipeline/export/raw.csv")
+    assert ds_id in raw_csv.headers["content-disposition"]
+    raw_rows = list(csv.reader(io.StringIO(raw_csv.text)))
+    assert all(row[7] == ds_id for row in raw_rows[1:])
+
+    raw_json = client.get("/api/pipeline/export/raw.json").json()
+    assert raw_json["dataset_id"] == ds_id
+
+    # 2. Cluster & check features + clustered exports
+    c_resp = client.post("/api/pipeline/cluster")
+    assert c_resp.json()["dataset_id"] == ds_id
+
+    feat_json = client.get("/api/pipeline/export/features.json").json()
+    assert feat_json["dataset_id"] == ds_id
+
+    clust_json = client.get("/api/pipeline/export/clustered.json").json()
+    assert clust_json["dataset_id"] == ds_id
+
+    clust_csv = client.get("/api/pipeline/export/clustered.csv")
+    assert ds_id in clust_csv.headers["content-disposition"]
+
+    # 3. Battery simulation link
+    bat_resp = client.post("/api/battery/simulate-current")
+    assert bat_resp.json()["dataset_id"] == ds_id
+
+    bat_json = client.get("/api/pipeline/export/battery.json").json()
+    assert bat_json["dataset_id"] == ds_id
+
+    # 4. Encryption & Receiver link
+    enc_resp = client.post("/api/pipeline/encrypt-and-verify")
+    assert enc_resp.json()["dataset_id"] == ds_id
+
+
+def test_generation_invalidates_stale_active_stage_results_and_downloads(client):
+    """Verify that generating a new dataset invalidates downstream stage results and downloads,
+    while preserving run history snapshots.
+    """
+    # Complete Run 1
+    client.post("/api/pipeline/generate-raw", json={"count": 30, "seed": 33})
+    client.post("/api/pipeline/cluster")
+    client.post("/api/battery/simulate-current")
+
+    # Features and battery are available for Run 1
+    assert client.get("/api/pipeline/export/features.csv").status_code == 200
+    assert client.get("/api/pipeline/export/battery.csv").status_code == 200
+
+    # Generate Run 2
+    client.post("/api/pipeline/generate-raw", json={"count": 25, "seed": 44})
+
+    # Raw is immediately available for Run 2
+    raw_resp = client.get("/api/pipeline/export/raw.csv")
+    assert raw_resp.status_code == 200
+    assert "stage1_raw_dataset_PIPE-S44-" in raw_resp.headers["content-disposition"]
+    rows = list(csv.reader(io.StringIO(raw_resp.text)))
+    assert len(rows) == 26  # Header + 25 rows
+
+    # Downstream exports MUST be invalidated (return 400)
+    feat_resp = client.get("/api/pipeline/export/features.csv")
+    assert feat_resp.status_code == 400
+    assert "Run ML Clustering first" in feat_resp.json()["detail"]
+
+    clust_resp = client.get("/api/pipeline/export/clustered.csv")
+    assert clust_resp.status_code == 400
+
+    bat_resp = client.get("/api/pipeline/export/battery.csv")
+    assert bat_resp.status_code == 400
+
+
+def test_explicit_seeds_allow_deterministic_reproducible_data(client):
+    """Verify that specifying an explicit seed reproduces exact bit-for-bit synthetic records."""
+    resp1 = client.post("/api/pipeline/generate-raw", json={"count": 30, "seed": 888})
+    data1 = resp1.json()
+
+    # Interleave with a different seed
+    client.post("/api/pipeline/generate-raw", json={"count": 20, "seed": 999})
+
+    # Re-run with seed 888
+    resp2 = client.post("/api/pipeline/generate-raw", json={"count": 30, "seed": 888})
+    data2 = resp2.json()
+
+    assert data1["seed"] == 888
+    assert data2["seed"] == 888
+
+    records1 = data1["all_records"]
+    records2 = data2["all_records"]
+
+    for r1, r2 in zip(records1, records2):
+        assert r1["record_type"] == r2["record_type"]
+        assert r1["value"] == r2["value"]
+        assert r1["unit"] == r2["unit"]
+        assert r1["demo_patient_id"] == r2["demo_patient_id"]

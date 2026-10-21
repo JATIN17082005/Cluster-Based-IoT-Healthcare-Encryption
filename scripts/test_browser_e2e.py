@@ -117,6 +117,8 @@ def run_redesign_verification():
         page.fill("#input-seed", "42")
         page.click("#btn-generate")
         time.sleep(1.5)
+        page.click("#btn-run-ml-clustering")
+        time.sleep(1.5)
 
         kpi_records = page.locator("#kpi-records-val").inner_text().strip()
         high_cnt = page.locator("#stat-high-count").inner_text().strip()

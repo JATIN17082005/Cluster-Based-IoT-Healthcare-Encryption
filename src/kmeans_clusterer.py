@@ -357,6 +357,7 @@ class KMeansPipeline:
 
             # Update record in-place with complete traceability fields
             rec.pipeline_run_id = pipeline_run_id
+            rec.dataset_id = getattr(rec, 'dataset_id', None) or pipeline_run_id
             rec.kmeans_cluster_id = c_id
             rec.cluster_label = c_label
             rec.cluster_id = c_label  # Backward-compatible link
@@ -482,6 +483,7 @@ class KMeansPipeline:
 
         result = ClusteringResult(
             pipeline_run_id=pipeline_run_id,
+            dataset_id=pipeline_run_id,
             config=self.config,
             diagnostics=diagnostics,
             total_records=n_records,

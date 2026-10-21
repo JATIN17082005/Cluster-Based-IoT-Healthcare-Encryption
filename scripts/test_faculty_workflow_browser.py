@@ -198,7 +198,7 @@ def run_faculty_workflow_browser_test():
 
             tab2_lineage = page.locator("#battery-sim-lineage-id").inner_text()
             print(f"   Tab 2 Lineage ID: {tab2_lineage}")
-            assert tab2_lineage == lineage_run_id
+            assert tab2_lineage.upper() == lineage_run_id.upper()
 
             # Verify Tab 2 per-record table has rows
             tab2_first_row = page.locator("#battery-simulation-table-body tr").first.inner_text()

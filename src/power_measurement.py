@@ -712,6 +712,7 @@ class McuEnergyModel:
 
                 per_record_entries.append({
                     "pipeline_run_id": pipeline_run_id,
+                    "dataset_id": pipeline_run_id,
                     "record_id": rec_id,
                     "repetition_index": rep,
                     "packet_index": global_packet_idx,
@@ -760,6 +761,7 @@ class McuEnergyModel:
 
         return {
             "pipeline_run_id": pipeline_run_id,
+            "dataset_id": pipeline_run_id,
             "total_records": len(records),
             "total_packets_simulated": len(per_record_entries),
             "high_sensitivity_count": n_high,
